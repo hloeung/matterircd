@@ -33,9 +33,6 @@ type UserBridge struct {
 	inprogress  bool               //nolint:structcheck
 	eventChan   chan *bridge.Event //nolint:structcheck
 
-	lastViewedAtMutex sync.RWMutex     //nolint:structcheck
-	lastViewedAt      map[string]int64 //nolint:structcheck
-
 	lastViewedAtDB *bolt.DB       //nolint:structcheck
 	msgCounter     map[string]int //nolint:structcheck
 
@@ -614,14 +611,6 @@ func (u *User) addUserToChannelWorker(channels <-chan *bridge.ChannelInfo, throt
 			return nil
 		})
 
-		// XXX: backwards compatibility with older DB format (pre bbolt).
-		// TODO: Remove in future releases.
-		if lastViewedAt == 0 {
-			u.lastViewedAtMutex.RLock()
-			lastViewedAt = u.lastViewedAt[brchannel.ID]
-			u.lastViewedAtMutex.RUnlock()
-		}
-
 		// But only use the stored last viewed if it's later than what the server knows.
 		if lastViewedAt > since {
 			since = lastViewedAt + 1
@@ -861,10 +850,6 @@ func (u *User) loginTo(protocol string) error {
 	u.User = info.User
 	u.MentionKeys = info.MentionKeys
 
-	// XXX: backwards compatibility with older DB format (pre bbolt).
-	// TODO: Remove in future releases.
-	u.lastViewedAt = u.loadLastViewedAt()
-
 	err = u.lastViewedAtDB.Update(func(tx *bolt.Tx) error {
 		_, err2 := tx.CreateBucketIfNotExists([]byte(u.User))
 		return err2
@@ -996,27 +981,6 @@ func (u *User) updateLastViewed(channelID string) {
 		time.Sleep(time.Duration(r) * time.Millisecond)
 		u.br.UpdateLastViewed(channelID)
 	}()
-}
-
-// TODO: This has been replaced by bbolt. Remove in future releases.
-func (u *User) loadLastViewedAt() map[string]int64 {
-	statePath := u.v.GetString("mattermost.lastviewedsavefile") + ".migrated"
-	if _, err := os.Stat(statePath); os.IsNotExist(err) {
-		return make(map[string]int64)
-	}
-
-	staleDuration := u.v.GetString("mattermost.lastviewedstaleduration")
-	lastViewedAt, err := loadLastViewedAtStateFile(statePath, staleDuration)
-	if err != nil {
-		logger.Warning("Unable to load saved lastViewedAt, using empty values: ", err)
-		return make(map[string]int64)
-	}
-
-	logger.Warning("Found old last viewed at state file, loading and removing")
-	logger.Info("Loaded lastViewedAt from ", time.Unix(lastViewedAt["__LastViewedStateSavedTime__"]/1000, 0))
-	os.Remove(statePath)
-
-	return lastViewedAt
 }
 
 func (u *User) saveLastViewedAt(channelID string) {
