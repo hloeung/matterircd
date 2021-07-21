@@ -291,8 +291,9 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 	case "notice":
 		ch.SpoofNotice(nick, event.Text)
 	default:
-		if u.v.GetBool("ootrace") && event.Multiline {
-			logger.Infof("OOTRACE: got msg %s on %d", event.Text, time.Now().UnixNano())
+		if u.v.GetBool("ootrace") && event.MessageIdx > 0 {
+			name := u.br.GetChannelName(event.ChannelID)
+			logger.Infof("OOTRACE: %s: %s: got     msg %d %s on %d", name, event.MessageID, event.MessageIdx, event.Text, time.Now().UnixNano())
 		}
 		ch.SpoofMessage(nick, event.Text)
 	}

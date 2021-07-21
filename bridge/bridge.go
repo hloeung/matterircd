@@ -125,7 +125,7 @@ type ChannelMessageEvent struct {
 	MessageID   string
 	Event       string
 	ParentID    string
-	Multiline   bool
+	MessageIdx  int
 }
 
 type ChannelTopicEvent struct {
