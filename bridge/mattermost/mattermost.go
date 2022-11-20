@@ -10,10 +10,11 @@ import (
 
 	"github.com/42wim/matterircd/bridge"
 	"github.com/davecgh/go-spew/spew"
+	prefixed "github.com/matterbridge/logrus-prefixed-formatter"
 	"github.com/matterbridge/matterclient"
 	"github.com/mattermost/mattermost-server/v6/model"
 	"github.com/mitchellh/mapstructure"
-	logger "github.com/sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
 
@@ -26,6 +27,8 @@ type Mattermost struct {
 	connected   bool
 }
 
+var logger *logrus.Entry
+
 func New(v *viper.Viper, cred bridge.Credentials, eventChan chan *bridge.Event, onWsConnect func()) (bridge.Bridger, *matterclient.Client, error) {
 	m := &Mattermost{
 		credentials: cred,
@@ -33,16 +36,21 @@ func New(v *viper.Viper, cred bridge.Credentials, eventChan chan *bridge.Event, 
 		v:           v,
 	}
 
-	logger.SetFormatter(&logger.TextFormatter{FullTimestamp: true})
+	ourlog := logrus.New()
+	ourlog.SetFormatter(&prefixed.TextFormatter{
+		PrefixPadding: 18,
+		FullTimestamp: true,
+	})
+	logger = ourlog.WithFields(logrus.Fields{"prefix": "bridge/mattermost"})
 	if v.GetBool("debug") {
-		logger.SetLevel(logger.DebugLevel)
+		ourlog.SetLevel(logrus.DebugLevel)
 	}
 
 	if v.GetBool("trace") {
-		logger.SetLevel(logger.TraceLevel)
+		ourlog.SetLevel(logrus.TraceLevel)
 	}
 
-	fmt.Println("loggerlevel:", logger.GetLevel())
+	fmt.Println("loggerlevel:", ourlog.GetLevel())
 
 	mc, err := m.loginToMattermost(onWsConnect)
 	if err != nil {
@@ -984,7 +992,7 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 
 	m.handleFileEvent(channelType, ghost, &data, rmsg)
 
-	logger.Debugf("handleWsActionPost() user %s sent %s", m.mc.GetUser(data.UserId).Username, data.Message)
+	logger.Debugf("handleWsActionPost() user %s sent %#v", m.mc.GetUser(data.UserId).Username, data.Message)
 	logger.Debugf("%#v", data) //nolint:govet
 }
 
