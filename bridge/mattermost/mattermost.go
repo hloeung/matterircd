@@ -963,7 +963,6 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 
 			d := &bridge.DirectMessageEvent{
 				Text:      msg,
-				Files:     m.getFilesFromData(&data),
 				ChannelID: data.ChannelId,
 				MessageID: data.Id,
 				Event:     rmsg.EventType(),
@@ -1005,7 +1004,6 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 					Sender:      ghost,
 					MessageType: messageType,
 					ChannelType: channelType,
-					Files:       m.getFilesFromData(&data),
 					MessageID:   data.Id,
 					Event:       rmsg.EventType(),
 					ParentID:    data.RootId,
@@ -1033,7 +1031,6 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 					ChannelID:   data.ChannelId,
 					Sender:      ghost,
 					ChannelType: channelType,
-					Files:       m.getFilesFromData(&data),
 					MessageID:   data.Id,
 					Event:       rmsg.EventType(),
 					ParentID:    data.RootId,
@@ -1048,7 +1045,9 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 		}
 	}
 
-	m.handleFileEvent(channelType, ghost, &data, rmsg)
+	if len(data.FileIds) > 0 {
+		m.handleFileEvent(channelType, ghost, &data, rmsg)
+	}
 
 	logger.Debugf("handleWsActionPost() user %s sent %#v", m.mc.GetUser(data.UserId).Username, data.Message)
 	logger.Debugf("%#v", data) //nolint:govet
@@ -1088,27 +1087,32 @@ func (m *Mattermost) handleFileEvent(channelType string, ghost *bridge.UserInfo,
 		})
 	}
 
-	if len(fileEvent.Files) > 0 {
-		switch {
-		case channelType == "D":
-			if ghost.Me {
-				fileEvent.Sender = ghost
-				fileEvent.Receiver = m.getDMUser(rmsg.GetData()["channel_name"])
-			} else {
-				fileEvent.Sender = m.getDMUser(rmsg.GetData()["channel_name"])
-				fileEvent.Receiver = ghost
-			}
-
-			if fileEvent.Sender == nil || fileEvent.Receiver == nil {
-				logger.Errorf("filedm: couldn't resolve sender or receiver: %#v", rmsg)
-				return
-			}
-
-			m.eventChan <- event
-		default:
-			m.eventChan <- event
-		}
+	if len(fileEvent.Files) == 0 {
+		logger.Debugf("handleFileEvent() user %s sent 0 files %#v", m.mc.GetUser(data.UserId).Username, data.FileIds)
+		return
 	}
+
+	switch {
+	case channelType == "D":
+		if ghost.Me {
+			fileEvent.Sender = ghost
+			fileEvent.Receiver = m.getDMUser(rmsg.GetData()["channel_name"])
+		} else {
+			fileEvent.Sender = m.getDMUser(rmsg.GetData()["channel_name"])
+			fileEvent.Receiver = ghost
+		}
+
+		if fileEvent.Sender == nil || fileEvent.Receiver == nil {
+			logger.Errorf("filedm: couldn't resolve sender or receiver: %#v", rmsg)
+			return
+		}
+
+		m.eventChan <- event
+	default:
+		m.eventChan <- event
+	}
+
+	logger.Debugf("handleFileEvent() user %s sent %d files %#v", m.mc.GetUser(data.UserId).Username, len(fileEvent.Files), data.FileIds)
 }
 
 func (m *Mattermost) wsActionPostJoinLeave(data *model.Post, extraProps map[string]interface{}) {

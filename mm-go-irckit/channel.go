@@ -135,7 +135,7 @@ func (ch *channel) Message(from *User, text string) {
 			Prefix:   from.Prefix(),
 			Command:  irc.PRIVMSG,
 			Params:   []string{ch.name},
-			Trailing: l + "\n",
+			Trailing: l,
 		}
 
 		ch.mu.RLock()
@@ -339,8 +339,6 @@ func (ch *channel) Join(u *User) error {
 		return nil
 	}
 
-	topic := ch.topic
-
 	ch.usersIdx[u.ID()] = u
 
 	ch.mu.Unlock()
@@ -373,20 +371,9 @@ func (ch *channel) Join(u *User) error {
 
 	ch.mu.RUnlock()
 
-	msgs := []*irc.Message{}
-
-	if topic != "" {
-		msgs = append(msgs, &irc.Message{
-			Prefix:   ch.Prefix(),
-			Command:  irc.RPL_TOPIC,
-			Params:   []string{u.Nick, ch.name},
-			Trailing: topic,
-		})
-	}
-
 	ch.SendNamesResponse(u)
 
-	return u.Encode(msgs...)
+	return nil
 }
 
 func (ch *channel) HasUser(u *User) bool {
@@ -452,7 +439,7 @@ func (ch *channel) Spoof(from string, text string, cmd string, maxlen ...int) {
 			Prefix:   &irc.Prefix{Name: from, User: from, Host: from},
 			Command:  cmd,
 			Params:   []string{ch.name},
-			Trailing: l + "\n",
+			Trailing: l,
 		}
 
 		ch.mu.RLock()
