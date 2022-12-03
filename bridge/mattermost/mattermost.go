@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/42wim/matterircd/bridge"
 	"github.com/davecgh/go-spew/spew"
 	prefixed "github.com/matterbridge/logrus-prefixed-formatter"
+	lru "github.com/hashicorp/golang-lru"
 	"github.com/matterbridge/matterclient"
 	"github.com/mattermost/mattermost-server/v6/model"
 	"github.com/mitchellh/mapstructure"
@@ -27,11 +27,7 @@ type Mattermost struct {
 	v           *viper.Viper
 	connected   bool
 
-	// Parent/root post message cache used for adding to threaded replies (unless HideReplies).
-	// The index is to make the size bounded so it's not unlimited.
-	msgMapMutex sync.RWMutex
-	msgMap      map[string]map[int]map[string]string
-	msgMapIdx   map[string]int
+	msglruCache *lru.Cache
 }
 
 var logger *logrus.Entry
@@ -42,8 +38,8 @@ func New(v *viper.Viper, cred bridge.Credentials, eventChan chan *bridge.Event, 
 		eventChan:   eventChan,
 		v:           v,
 	}
-	m.msgMap = make(map[string]map[int]map[string]string)
-	m.msgMapIdx = make(map[string]int)
+	cache, _ := lru.New(100)
+	m.msglruCache = cache
 
 	ourlog := logrus.New()
 	ourlog.SetFormatter(&prefixed.TextFormatter{
@@ -773,30 +769,12 @@ func maybeShorten(msg string, newLen int, uncounted string, unicode bool) string
 	return fmt.Sprintf("%s %s", newMsg, ellipsis)
 }
 
-// XXX: Maybe make the buffer/cache size configurable?
-const defaultReplyMsgCacheSize = 30
+func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncounted string, unicode bool) (string, error) {
+	var replyMessage string
 
-func (m *Mattermost) addParentMsg(parentID string, msg string, channelID string, newLen int, uncounted string, unicode bool) (string, error) {
-	if _, ok := m.msgMap[channelID]; !ok {
-		// Map doesn't exist for this channel, let's create it.
-		mm := make(map[int]map[string]string)
-		m.msgMap[channelID] = mm
-		m.msgMapIdx[channelID] = 0
-	}
-
-	replyMessage := ""
 	// Search and use cached reply if it exists.
-	for _, element := range m.msgMap[channelID] {
-		for postID, reply := range element {
-			if postID == parentID {
-				logger.Debugf("Found saved reply for parent post %s, using:%s", parentID, reply)
-				replyMessage = reply
-			}
-		}
-	}
-
 	// None found, so we'll need to create one and save it for future uses.
-	if replyMessage == "" {
+	if v, ok := m.msglruCache.Get(parentID); !ok {
 		parentPost, _, err := m.mc.Client.GetPost(parentID, "")
 		// Retry once on failure.
 		if err != nil {
@@ -809,21 +787,11 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, channelID string,
 		parentUser := m.GetUser(parentPost.UserId)
 		parentMessage := maybeShorten(parentPost.Message, newLen, uncounted, unicode)
 		replyMessage = fmt.Sprintf(" (re @%s: %s)", parentUser.Nick, parentMessage)
-
 		logger.Debugf("Created reply for parent post %s:%s", parentID, replyMessage)
 
-		m.msgMapMutex.Lock()
-		defer m.msgMapMutex.Unlock()
-
-		// Delete existing entry if present
-		delete(m.msgMap[channelID], m.msgMapIdx[channelID])
-		// Now insert new
-		m.msgMap[channelID][m.msgMapIdx[channelID]] = make(map[string]string)
-		m.msgMap[channelID][m.msgMapIdx[channelID]][parentID] = replyMessage
-		m.msgMapIdx[channelID] += 1
-		if m.msgMapIdx[channelID] > defaultReplyMsgCacheSize {
-			m.msgMapIdx[channelID] = 0
-		}
+		m.msglruCache.Add(parentID, replyMessage)
+	} else if replyMessage, ok = v.(string); ok {
+		logger.Debugf("Found saved reply for parent post %s, using:%s", parentID, replyMessage)
 	}
 
 	return strings.TrimRight(msg, "\n") + replyMessage, nil
@@ -845,7 +813,7 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 	}
 
 	if !m.v.GetBool("mattermost.hidereplies") && data.RootId != "" {
-		message, err := m.addParentMsg(data.RootId, data.Message, data.ChannelId, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
+		message, err := m.addParentMsg(data.RootId, data.Message, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
 		if err != nil {
 			logger.Errorf("Unable to get parent post for %#v", data) //nolint:govet
 		}
@@ -1305,7 +1273,7 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 	var parentUser *bridge.UserInfo
 	rMessage := ""
 	if !m.v.GetBool("mattermost.hidereplies") {
-		message, err := m.addParentMsg(reaction.PostId, "", channelID, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
+		message, err := m.addParentMsg(reaction.PostId, "", m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
 		if err != nil {
 			logger.Errorf("Unable to get parent post for %#v", reaction)
 		}
