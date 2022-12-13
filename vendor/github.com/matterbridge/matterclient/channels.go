@@ -305,7 +305,9 @@ func (m *Client) UpdateChannelHeader(channelID string, header string) {
 }
 
 func (m *Client) UpdateLastViewed(channelID string) error {
-	m.logger.Debugf("posting lastview %#v", channelID)
+	if channelID != "1tq37i8sqfrg7x611gifz8xf9y" {
+		m.logger.Debugf("posting lastview %#v", channelID)
+	}
 
 	view := &model.ChannelView{ChannelId: channelID}
 

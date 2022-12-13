@@ -87,7 +87,7 @@ func New(login string, pass string, team string, server string, mfatoken string)
 	rootLogger := logrus.New()
 	rootLogger.SetFormatter(&prefixed.TextFormatter{
 		PrefixPadding: 13,
-		DisableColors: true,
+		DisableColors: false,
 		FullTimestamp: true,
 	})
 
@@ -532,7 +532,7 @@ func (m *Client) wsConnect() {
 }
 
 func (m *Client) doCheckAlive() error {
-	if _, _, err := m.Client.GetMe(""); err != nil {
+	if _, _, err := m.Client.GetPing(); err != nil {
 		return err
 	}
 
@@ -617,7 +617,9 @@ func (m *Client) WsReceiver(ctx context.Context) {
 				continue
 			}
 
-			m.logger.Debugf("WsReceiver event: %#v", event)
+			//if event.EventType() != "channel_viewed" && event.EventType() != "typing" {
+			//	m.logger.Debugf("WsReceiver event: %#v", event)
+			//}
 
 			msg := &Message{
 				Raw:  event,
@@ -634,12 +636,14 @@ func (m *Client) WsReceiver(ctx context.Context) {
 				continue
 			}
 
-			m.logger.Debugf("WsReceiver response: %#v", response)
-
 			if text, ok := response.Data["text"].(string); ok {
 				if text == "pong" {
 					m.lastPong = time.Now()
+				} else {
+					m.logger.Debugf("WsReceiver response: %#v", response)
 				}
+			} else {
+				m.logger.Debugf("WsReceiver response: %#v", response)
 			}
 
 			m.parseResponse(response)

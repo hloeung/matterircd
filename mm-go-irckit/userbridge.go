@@ -33,6 +33,7 @@ type UserBridge struct {
 	br          bridge.Bridger     //nolint:structcheck
 	inprogress  bool               //nolint:structcheck
 	eventChan   chan *bridge.Event //nolint:structcheck
+	away        bool               //nolint:structcheck
 
 	lastViewedAtDB *bolt.DB       //nolint:structcheck
 	msgCounter     map[string]int //nolint:structcheck
@@ -379,14 +380,20 @@ func (u *User) handleStatusChangeEvent(event *bridge.StatusChangeEvent) {
 	if event.UserID == u.br.GetMe().User {
 		switch event.Status {
 		case "online":
-			logger.Debug("setting myself online")
-			u.Srv.EncodeMessage(u, irc.RPL_UNAWAY, []string{u.Nick}, "You are no longer marked as being away")
+			if u.away {
+				logger.Debug("setting myself online")
+				u.away = false
+				u.Srv.EncodeMessage(u, irc.RPL_UNAWAY, []string{u.Nick}, "You are no longer marked as being away")
+			}
 		// Ignore `offline` status changes to prevent bouncing between being marked away and not.
 		case "offline":
 			logger.Debugf("doing nothing as status %s", event.Status)
 		default:
-			logger.Debug("setting myself away")
-			u.Srv.EncodeMessage(u, irc.RPL_NOWAWAY, []string{u.Nick}, "You have been marked as being away")
+			if !u.away {
+				logger.Debug("setting myself away")
+				u.away = true
+				u.Srv.EncodeMessage(u, irc.RPL_NOWAWAY, []string{u.Nick}, "You have been marked as being away")
+			}
 		}
 	}
 }
@@ -1090,13 +1097,14 @@ func (u *User) handleMessageThreadContext(channelID, messageID, parentID, event,
 	return newText, prefix, suffix, showContext, maxlen
 }
 
+//nolint:gocyclo
 func (u *User) formatCodeBlockText(text string, prefix string, codeBlockBackTick bool, codeBlockTilde bool, lexer string) (string, bool, bool, string) {
-
 	// skip empty lines for anything not part of a code block.
-	if !(codeBlockBackTick || codeBlockTilde) && text == "" {
+	if text == "" {
+		if codeBlockBackTick || codeBlockTilde {
+			return " ", codeBlockBackTick, codeBlockTilde, lexer
+		}
 		return "", codeBlockBackTick, codeBlockTilde, lexer
-	} else if text == "" {
-		return " ", codeBlockBackTick, codeBlockTilde, lexer
 	}
 
 	syntaxHighlighting := u.v.GetString(u.br.Protocol() + ".syntaxhighlighting")

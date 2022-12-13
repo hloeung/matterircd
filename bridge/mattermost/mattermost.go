@@ -10,8 +10,8 @@ import (
 
 	"github.com/42wim/matterircd/bridge"
 	"github.com/davecgh/go-spew/spew"
-	prefixed "github.com/matterbridge/logrus-prefixed-formatter"
 	lru "github.com/hashicorp/golang-lru"
+	prefixed "github.com/matterbridge/logrus-prefixed-formatter"
 	"github.com/matterbridge/matterclient"
 	"github.com/mattermost/mattermost-server/v6/model"
 	"github.com/mitchellh/mapstructure"
@@ -27,7 +27,8 @@ type Mattermost struct {
 	v           *viper.Viper
 	connected   bool
 
-	msglruCache *lru.Cache
+	msgParentCache   *lru.Cache
+	msgLastSentCache *lru.Cache
 }
 
 var logger *logrus.Entry
@@ -38,12 +39,13 @@ func New(v *viper.Viper, cred bridge.Credentials, eventChan chan *bridge.Event, 
 		eventChan:   eventChan,
 		v:           v,
 	}
-	cache, _ := lru.New(100)
-	m.msglruCache = cache
+	m.msgParentCache, _ = lru.New(100)
+	m.msgLastSentCache, _ = lru.New(10)
 
 	ourlog := logrus.New()
 	ourlog.SetFormatter(&prefixed.TextFormatter{
 		PrefixPadding: 18,
+		DisableColors: false,
 		FullTimestamp: true,
 	})
 	logger = ourlog.WithFields(logrus.Fields{"prefix": "bridge/mattermost"})
@@ -130,14 +132,19 @@ func (m *Mattermost) handleWsMessage(quitChan chan struct{}) {
 			return
 		}
 
-		logger.Debug("in handleWsMessage", len(m.mc.MessageChan))
+		//logger.Debug("in handleWsMessage", len(m.mc.MessageChan))
 
 		select {
 		case <-quitChan:
 			logger.Debug("exiting handleWsMessage")
 			return
 		case message := <-m.mc.MessageChan:
-			logger.Debugf("MMUser WsReceiver: %#v", message.Raw)
+			if message.Raw.EventType() == "posted" {
+				logger.Debugf("in handleWsMessage%d (%s)", len(m.mc.MessageChan), message.Raw.EventType())
+			} else if message.Raw.EventType() != "channel_viewed" && message.Raw.EventType() != "typing" && message.Raw.EventType() != "user_updated" && message.Raw.EventType() != "sidebar_category_updated" && message.Raw.EventType() != "preferences_changed" {
+				logger.Debugf("in handleWsMessage%d (%s) %#v", len(m.mc.MessageChan), message.Raw.EventType(), message.Raw)
+			}
+			//logger.Debugf("MMUser WsReceiver: %#v", message.Raw)
 			logger.Tracef("handleWsMessage %s", spew.Sdump(message))
 
 			switch message.Raw.EventType() {
@@ -289,10 +296,6 @@ func (m *Mattermost) MsgUser(userID, text string) (string, error) {
 }
 
 func (m *Mattermost) MsgUserThread(userID, parentID, text string) (string, error) {
-	props := make(map[string]interface{})
-
-	props["matterircd_"+m.mc.User.Id] = true
-
 	// create DM channel (only happens on first message)
 	dchannel, _, err := m.mc.Client.CreateDirectChannel(m.mc.User.Id, userID)
 	if err != nil {
@@ -301,20 +304,8 @@ func (m *Mattermost) MsgUserThread(userID, parentID, text string) (string, error
 
 	// build & send the message
 	text = strings.ReplaceAll(text, "\r", "")
-	post := &model.Post{
-		ChannelId: dchannel.Id,
-		Message:   text,
-		RootId:    parentID,
-	}
 
-	post.SetProps(props)
-
-	rp, _, err := m.mc.Client.CreatePost(post)
-	if err != nil {
-		return "", err
-	}
-
-	return rp.Id, nil
+	return m.MsgChannelThread(dchannel.Id, parentID, text)
 }
 
 func (m *Mattermost) MsgChannel(channelID, text string) (string, error) {
@@ -334,11 +325,34 @@ func (m *Mattermost) MsgChannelThread(channelID, parentID, text string) (string,
 	post.SetProps(props)
 
 	rp, _, err := m.mc.Client.CreatePost(post)
+	if err == nil {
+		return rp.Id, nil
+	}
+
+	if parentID == "" {
+		return "", err
+	}
+
+	// Try to work out if we're trying to reply to a post within a thread.
+	replyPost, _, err := m.mc.Client.GetPost(parentID, "")
 	if err != nil {
 		return "", err
 	}
 
-	return rp.Id, nil
+	post = &model.Post{
+		ChannelId: channelID,
+		Message:   text,
+		RootId:    replyPost.RootId,
+	}
+
+	post.SetProps(props)
+
+	rp, _, err = m.mc.Client.CreatePost(post)
+	if err == nil {
+		return rp.Id, nil
+	}
+
+	return "", err
 }
 
 func (m *Mattermost) ModifyPost(msgID, text string) error {
@@ -460,6 +474,7 @@ func (m *Mattermost) GetChannelName(channelID string) string {
 	channelName := m.mc.GetChannelName(channelID)
 
 	if channelName == "" {
+		logger.Warnf("HAW UpdateChannels() failed for channel %s; refreshing from MM server", channelID)
 		m.mc.UpdateChannels()
 	}
 
@@ -716,19 +731,45 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 		return true
 	}
 
-	if data.UserId == m.GetMe().User {
-		if _, ok := extraProps["matterircd_"+m.GetMe().User].(bool); ok {
-			logger.Debugf("message is sent from matterirc, not relaying %#v", data.Message)
-			return true
-		}
+	if data.UserId != m.GetMe().User {
+		return false
+	}
 
-		if data.Type == model.PostTypeLeaveChannel || data.Type == model.PostTypeJoinChannel {
-			logger.Debugf("our own join/leave message. not relaying %#v", data.Message)
-			return true
+	if _, ok := extraProps["matterircd_"+m.GetMe().User].(bool); !ok {
+		return false
+	}
+
+	if data.Type == model.PostTypeLeaveChannel || data.Type == model.PostTypeJoinChannel {
+		logger.Debugf("our own join/leave message. not relaying %#v", data.Message)
+		return true
+	}
+
+	// XXX: HAW: ...
+	logger.Warnf("HAW: wsActionPostSkip() %#v", data)
+	logger.Debugf("message is sent from matterirc, not relaying %#v", data.Message)
+
+	msgID := data.Id
+	msg := data.Message
+	channel := m.GetChannelName(data.ChannelId)
+
+	if strings.Contains(channel, "__") {
+		receiver := m.getDMUser(channel)
+		channel = receiver.Username
+	}
+
+	if data.RootId != "" {
+		msgID = data.RootId
+		if !m.v.GetBool("mattermost.hidereplies") {
+			newMsg, err := m.addParentMsg(data.RootId, data.Message, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
+			if err == nil {
+				msg = newMsg
+			}
 		}
 	}
 
-	return false
+	m.msgLastSentCache.Add(msgID, fmt.Sprintf("%s: %s", channel, msg))
+
+	return true
 }
 
 // maybeShorten returns a prefix of msg that is approximately newLen
@@ -774,7 +815,7 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 
 	// Search and use cached reply if it exists.
 	// None found, so we'll need to create one and save it for future uses.
-	if v, ok := m.msglruCache.Get(parentID); !ok {
+	if v, ok := m.msgParentCache.Get(parentID); !ok {
 		parentPost, _, err := m.mc.Client.GetPost(parentID, "")
 		// Retry once on failure.
 		if err != nil {
@@ -789,7 +830,7 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 		replyMessage = fmt.Sprintf(" (re @%s: %s)", parentUser.Nick, parentMessage)
 		logger.Debugf("Created reply for parent post %s:%s", parentID, replyMessage)
 
-		m.msglruCache.Add(parentID, replyMessage)
+		m.msgParentCache.Add(parentID, replyMessage)
 	} else if replyMessage, ok = v.(string); ok {
 		logger.Debugf("Found saved reply for parent post %s, using:%s", parentID, replyMessage)
 	}
@@ -807,7 +848,7 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 	props := rmsg.GetData()
 	extraProps := data.GetProps()
 
-	logger.Debugf("handleWsActionPost() receiving userid %s", data.UserId)
+	// logger.Debugf("handleWsActionPost() receiving userid %s", data.UserId)
 	if m.wsActionPostSkip(rmsg) {
 		return
 	}
@@ -1017,8 +1058,8 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 		m.handleFileEvent(channelType, ghost, &data, rmsg)
 	}
 
-	logger.Debugf("handleWsActionPost() user %s sent %#v", m.mc.GetUser(data.UserId).Username, data.Message)
-	logger.Debugf("%#v", data) //nolint:govet
+	// logger.Debugf("handleWsActionPost() user %s sent %#v", m.mc.GetUser(data.UserId).Username, data.Message)
+	logger.Debugf("handleWsActionPost() user %s sent %#v", m.mc.GetUser(data.UserId).Username, data) //nolint:govet
 }
 
 func (m *Mattermost) getFilesFromData(data *model.Post) []*bridge.File {
@@ -1442,4 +1483,17 @@ func parseMatterpollToMsg(attachments []*model.SlackAttachment) string {
 	}
 
 	return msg
+}
+
+func (m *Mattermost) GetLastSentMsgs() []string {
+	data := make([]string, 0)
+
+	for _, k := range m.msgLastSentCache.Keys() {
+		if v, ok := m.msgLastSentCache.Get(k); ok {
+			msg, _ := v.(string)
+			data = append(data, fmt.Sprintf("[@@%s] %s", k, msg))
+		}
+	}
+
+	return data
 }

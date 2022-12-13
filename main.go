@@ -34,6 +34,7 @@ func main() {
 	ourlog := logrus.New()
 	ourlog.Formatter = &prefixed.TextFormatter{
 		PrefixPadding: 11,
+		DisableColors: false,
 		FullTimestamp: true,
 	}
 	logger = ourlog.WithFields(logrus.Fields{"prefix": "matterircd"})

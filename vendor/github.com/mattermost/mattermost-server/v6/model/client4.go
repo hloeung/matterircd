@@ -7,6 +7,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	prefixed "github.com/matterbridge/logrus-prefixed-formatter"
+	"github.com/sirupsen/logrus"
 	"io"
 	"io/ioutil"
 	"mime/multipart"
@@ -73,6 +75,8 @@ type Client4 struct {
 	falseString string
 }
 
+var logger *logrus.Entry
+
 // SetBoolString is a helper method for overriding how true and false query string parameters are
 // sent to the server.
 //
@@ -108,6 +112,13 @@ func closeBody(r *http.Response) {
 }
 
 func NewAPIv4Client(url string) *Client4 {
+	ourlog := logrus.New()
+	ourlog.SetFormatter(&prefixed.TextFormatter{
+		PrefixPadding: 14,
+		DisableColors: false,
+		FullTimestamp: true,
+	})
+	logger = ourlog.WithFields(logrus.Fields{"prefix": "model/client4"})
 	url = strings.TrimRight(url, "/")
 	return &Client4{url, url + APIURLSuffix, &http.Client{}, "", "", map[string]string{}, "", ""}
 }
@@ -549,34 +560,50 @@ func (c *Client4) permissionsRoute() string {
 }
 
 func (c *Client4) DoAPIGet(url string, etag string) (*http.Response, error) {
+	if url != "/system/ping" {
+		logger.Warnf("HAW: DoAPIGet(): %s", url)
+	}
 	return c.DoAPIRequest(http.MethodGet, c.APIURL+url, "", etag)
 }
 
 func (c *Client4) DoAPIPost(url string, data string) (*http.Response, error) {
+	if url == "/users/status/ids" {
+		logger.Warnf("HAW: DoAPIPost(): %s: ...", url)
+	} else {
+		logger.Warnf("HAW: DoAPIPost(): %s: %s", url, data)
+	}
 	return c.DoAPIRequest(http.MethodPost, c.APIURL+url, data, "")
 }
 
 func (c *Client4) DoAPIDeleteBytes(url string, data []byte) (*http.Response, error) {
+	logger.Warnf("HAW: DoAPIDeleteBytes(): %s", url)
 	return c.DoAPIRequestBytes(http.MethodDelete, c.APIURL+url, data, "")
 }
 
 func (c *Client4) DoAPIPatchBytes(url string, data []byte) (*http.Response, error) {
+	logger.Warnf("HAW: DoAPIPatchBytes(): %s", url)
 	return c.DoAPIRequestBytes(http.MethodPatch, c.APIURL+url, data, "")
 }
 
 func (c *Client4) DoAPIPostBytes(url string, data []byte) (*http.Response, error) {
+	if url != "/channels/members/m45ssk4t4bfwufbghxnmj89d4a/view" {
+		logger.Warnf("HAW: DoAPIPostBytes(): %s", url)
+	}
 	return c.DoAPIRequestBytes(http.MethodPost, c.APIURL+url, data, "")
 }
 
 func (c *Client4) DoAPIPut(url string, data string) (*http.Response, error) {
+	logger.Warnf("HAW: DoAPIPut(): %s", url)
 	return c.DoAPIRequest(http.MethodPut, c.APIURL+url, data, "")
 }
 
 func (c *Client4) DoAPIPutBytes(url string, data []byte) (*http.Response, error) {
+	logger.Warnf("HAW: DoAPIPutBytes(): %s", url)
 	return c.DoAPIRequestBytes(http.MethodPut, c.APIURL+url, data, "")
 }
 
 func (c *Client4) DoAPIDelete(url string) (*http.Response, error) {
+	logger.Warnf("HAW: DoAPIDelete(): %s", url)
 	return c.DoAPIRequest(http.MethodDelete, c.APIURL+url, "", "")
 }
 
@@ -585,6 +612,7 @@ func (c *Client4) DoAPIRequest(method, url, data, etag string) (*http.Response, 
 }
 
 func (c *Client4) DoAPIRequestWithHeaders(method, url, data string, headers map[string]string) (*http.Response, error) {
+	logger.Warnf("HAW: DoAPIRequestWithHeaders(): %s", url)
 	return c.DoAPIRequestReader(method, url, strings.NewReader(data), headers)
 }
 
@@ -877,6 +905,7 @@ func (c *Client4) CreateUserWithInviteId(user *User, inviteId string) (*User, *R
 
 // GetMe returns the logged in user.
 func (c *Client4) GetMe(etag string) (*User, *Response, error) {
+	logger.Warnf("HAW: GetMe()")
 	r, err := c.DoAPIGet(c.userRoute(Me), etag)
 	if err != nil {
 		return nil, BuildResponse(r), err

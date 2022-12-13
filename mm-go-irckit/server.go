@@ -235,6 +235,8 @@ func (s *server) Channel(channelID string) Channel {
 			// don't error on our special channels
 			if channelID != "" && !strings.HasPrefix(channelID, "&") && channelID != s.u.Nick && channelID != s.u.Username {
 				logger.Errorf("didn't find channel %s (%s): %s", channelID, name, err)
+			} else {
+				logger.Warnf("HAW Channel() special channel names: %s %s %s", channelID, s.u.Nick, s.u.Username)
 			}
 			info = &bridge.ChannelInfo{}
 		}
@@ -358,7 +360,10 @@ func (s *server) handle(u *User) {
 		}
 		go func(msg *irc.Message) {
 			err := s.commands.Run(s, u, msg)
-			logger.Debugf("Executed %#v %#v", msg, err)
+			// XXX: HAW
+			if msg.Command != irc.PING && msg.Command != irc.MODE && msg.Command != irc.WHO {
+				logger.Debugf("Executed %#v %#v", msg, err)
+			}
 			if err == ErrUnknownCommand {
 				// TODO: Emit event?
 			} else if err != nil {

@@ -10,7 +10,9 @@ import (
 )
 
 func (m *Client) parseResponse(rmsg *model.WebSocketResponse) {
-	m.logger.Debugf("getting response: %#v", rmsg)
+	if rmsg.Data["text"] != "pong" {
+		m.logger.Debugf("getting response: %#v", rmsg)
+	}
 }
 
 func (m *Client) DeleteMessage(postID string) error {

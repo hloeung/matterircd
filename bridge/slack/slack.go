@@ -9,8 +9,7 @@ import (
 
 	"github.com/42wim/matterircd/bridge"
 	"github.com/davecgh/go-spew/spew"
-	prefixed "github.com/matterbridge/logrus-prefixed-formatter"
-	"github.com/sirupsen/logrus"
+	logger "github.com/sirupsen/logrus"
 	"github.com/slack-go/slack"
 	"github.com/spf13/viper"
 )
@@ -30,8 +29,6 @@ type Slack struct {
 	v *viper.Viper
 }
 
-var logger *logrus.Entry
-
 func New(v *viper.Viper, cred bridge.Credentials, eventChan chan *bridge.Event, onConnect func()) (bridge.Bridger, error) {
 	s := &Slack{
 		credentials: cred,
@@ -42,18 +39,13 @@ func New(v *viper.Viper, cred bridge.Credentials, eventChan chan *bridge.Event, 
 
 	var err error
 
-	ourlog := logrus.New()
-	ourlog.SetFormatter(&prefixed.TextFormatter{
-		PrefixPadding: 13,
-		FullTimestamp: true,
-	})
-	logger = ourlog.WithFields(logrus.Fields{"prefix": "bridge/slack"})
+	logger.SetFormatter(&logger.TextFormatter{FullTimestamp: true})
 	if v.GetBool("debug") {
-		ourlog.SetLevel(logrus.DebugLevel)
+		logger.SetLevel(logger.DebugLevel)
 	}
 
 	if v.GetBool("trace") {
-		ourlog.SetLevel(logrus.TraceLevel)
+		logger.SetLevel(logger.TraceLevel)
 	}
 
 	s.sc, err = s.loginToSlack()
@@ -967,4 +959,8 @@ func (s *Slack) AddReaction(msgID, emoji string) error {
 
 func (s *Slack) RemoveReaction(msgID, emoji string) error {
 	return nil
+}
+
+func (s *Slack) GetLastSentMsgs() []string {
+	return []string{}
 }

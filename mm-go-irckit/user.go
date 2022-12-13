@@ -142,7 +142,10 @@ func (u *User) Encode(msgs ...*irc.Message) (err error) {
 			continue
 		}
 
-		logger.Debugf("-> %s", msg)
+		// XXX: HAW - vendor/github.com/sorcix/irc/constants.go
+		if msg.Command != irc.PONG && msg.Command != irc.RPL_WHOREPLY && msg.Command != irc.RPL_ENDOFWHO && msg.Command != irc.RPL_NAMREPLY && msg.Command != irc.RPL_ENDOFNAMES && msg.Command != irc.RPL_ENDOFBANLIST && msg.Command != irc.RPL_CHANNELMODEIS {
+			logger.Debugf("-> \"%s\"", msg)
+		}
 
 		err := u.Conn.Encode(msg)
 		if err != nil {
@@ -240,8 +243,10 @@ func (u *User) Decode() {
 		}
 		// PRIVMSG can be buffered
 		if msg.Command == "PRIVMSG" {
-			logger.Debugf("B: %#v", dmsg)
+			logger.Debugf("Buf: %#v", dmsg)
 			buffer <- msg
+		} else if msg.Command == "PING" || msg.Command == "MODE" {
+			u.DecodeCh <- msg
 		} else {
 			logger.Debug(dmsg)
 			u.DecodeCh <- msg
