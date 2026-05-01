@@ -285,7 +285,7 @@ func search(u *User, toUser *User, args []string, service string) {
 		}
 
 		for _, fname := range u.br.GetFileLinks(p.FileIds) {
-			fileMsg := "\x1ddownload file - " + fname + "\x1d" //nolint:goconst
+			fileMsg := "\x1ddownload file - " + fname + "\x1d"
 			formatSearchMsg(u, p.ChannelId, channelname, toUser, nick, p, fileMsg)
 		}
 	}
