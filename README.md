@@ -127,7 +127,7 @@ Search
 /msg mattermost search query
 /msg mattermost search 10 query
 ```
-Search modifiers are also supported, see https://docs.mattermost.com/collaborate/search-for-messages.html#search-modifiers
+Search modifiers are also supported, see https://docs.mattermost.com/collaborate/search-for-messages.html#search-modifiers.
 ```
 /msg mattermost search 10 some-string from: hloeung after: 2023-09-27 in: matterircd
 ```
