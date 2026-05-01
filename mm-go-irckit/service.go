@@ -341,7 +341,7 @@ func replay(u *User, toUser *User, args []string, service string) {
 		case p.Type == model.PostTypeRemoveFromTeam:
 			nick = systemUser
 			ghost := u.createUserFromInfo(user)
-			u.Srv.Channel(brchannel.ID).Part(ghost, "") //nolint:errcheck
+			u.Srv.Channel(brchannel.ID).Part(ghost, "")
 		case p.Type == model.PostTypeJoinChannel:
 			ghost := u.createUserFromInfo(user)
 			u.Srv.Channel(brchannel.ID).Join(ghost) //nolint:errcheck
