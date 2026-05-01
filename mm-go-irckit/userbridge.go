@@ -170,7 +170,7 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 			text = markdown2irc(text)
 		}
 
-		if !u.v.GetBool(u.br.Protocol()+".disableemoji") && !codeBlockBackTick && !codeBlockTilde { //nolint:goconst
+		if !u.v.GetBool(u.br.Protocol()+".disableemoji") && !codeBlockBackTick && !codeBlockTilde {
 			text = emoji.ReplaceAliases(text)
 		}
 
