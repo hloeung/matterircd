@@ -20,6 +20,7 @@ import (
 	"github.com/42wim/matterircd/bridge/slack"
 	"github.com/alecthomas/chroma/v2/quick"
 	"github.com/davecgh/go-spew/spew"
+	"github.com/kenshaw/emoji"
 	"github.com/mattermost/mattermost-server/v6/model"
 	"github.com/muesli/reflow/wordwrap"
 	"github.com/sorcix/irc"
@@ -145,11 +146,23 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 		}
 	}
 
-	prefixUser := event.Sender.User
-	if event.Sender.Me {
-		prefixUser = event.Receiver.User
+	var text string
+	var showContext bool
+	var maxlen int
+
+	prefix := ""
+	suffix := ""
+	if event.Event == "dm_topic" {
+		text = event.Text
+		showContext = false
+		maxlen = 0
+	} else {
+		prefixUser := event.Sender.User
+		if event.Sender.Me {
+			prefixUser = event.Receiver.User
+		}
+		text, prefix, suffix, showContext, maxlen = u.handleMessageThreadContext(prefixUser, event.MessageID, event.ParentID, event.Event, event.Text)
 	}
-	text, prefix, suffix, showContext, maxlen := u.handleMessageThreadContext(prefixUser, event.MessageID, event.ParentID, event.Event, event.Text)
 
 	lexer := ""
 	codeBlockBackTick := false
@@ -167,6 +180,10 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 
 		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && !codeBlockBackTick && !codeBlockTilde {
 			text = markdown2irc(text)
+		}
+
+		if !u.v.GetBool(u.br.Protocol()+".disableemoji") && !codeBlockBackTick && !codeBlockTilde {
+			text = emoji.ReplaceAliases(text)
 		}
 
 		if showContext {
@@ -328,6 +345,10 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 			text = markdown2irc(text)
 		}
 
+		if !u.v.GetBool(u.br.Protocol()+".disableemoji") && !codeBlockBackTick && !codeBlockTilde {
+			text = emoji.ReplaceAliases(text)
+		}
+
 		if showContext {
 			text = prefix + text + suffix
 		}
@@ -466,6 +487,13 @@ func (u *User) handleReactionEvent(event interface{}) {
 	if u.v.GetBool(u.br.Protocol() + ".hidereactions") {
 		logger.Debug("Not showing reaction: " + text + reaction)
 		return
+	}
+
+	if !u.v.GetBool(u.br.Protocol() + ".disableemoji") {
+		reactionEmoji := emoji.FromAlias(reaction)
+		if reactionEmoji != nil {
+			reaction = fmt.Sprintf("%s", reactionEmoji)
+		}
 	}
 
 	if channelType == "D" {
@@ -761,7 +789,7 @@ func (u *User) loginTo(protocol string) error {
 		u.br, err = slack.New(u.v, u.Credentials, u.eventChan, u.addUsersToChannels)
 	case "mattermost":
 		u.eventChan = make(chan *bridge.Event)
-		if u.v.GetBool("mattermost.ignoreserverversion") || strings.HasPrefix(u.getMattermostVersion(), "7.") || strings.HasPrefix(u.getMattermostVersion(), "8.") || strings.HasPrefix(u.getMattermostVersion(), "9.") {
+		if u.v.GetBool("mattermost.ignoreserverversion") || strings.HasPrefix(u.getMattermostVersion(), "7.") || strings.HasPrefix(u.getMattermostVersion(), "8.") || strings.HasPrefix(u.getMattermostVersion(), "9.") || strings.HasPrefix(u.getMattermostVersion(), "10.") {
 			u.br, _, err = mattermost.New(u.v, u.Credentials, u.eventChan, u.addUsersToChannels)
 		} else {
 			return fmt.Errorf("mattermost version %s not supported", u.getMattermostVersion())
