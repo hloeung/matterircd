@@ -822,7 +822,6 @@ func CmdWhois(s Server, u *User, msg *irc.Message) error {
 	return s.EncodeMessage(u, irc.ERR_NOSUCHNICK, msg.Params, "No such nick/channel")
 }
 
-//nolint:funlen
 func irc2markdown(msg string) string {
 	// https://modern.ircdocs.horse/formatting.html
 	emphasisSupported := map[byte][]byte{
