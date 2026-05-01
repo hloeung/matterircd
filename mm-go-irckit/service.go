@@ -275,7 +275,12 @@ func replay(u *User, toUser *User, args []string, service string) {
 	err = u.lastViewedAtDB.View(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte(u.User))
 		if v := b.Get([]byte(key)); v != nil {
-			lastViewedAt = int64(binary.LittleEndian.Uint64(v))
+			val := binary.LittleEndian.Uint64(v)
+			if val > math.MaxInt64 {
+				logger.Errorf("timestamp value %d exceeds int64 range", val)
+			} else {
+				lastViewedAt = int64(val)
+			}
 		}
 		return nil
 	})
