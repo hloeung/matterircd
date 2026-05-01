@@ -1006,7 +1006,6 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 
 	for _, msg := range msgs {
 		switch {
-		// DirectMessage
 		case channelType == "D":
 			event := &bridge.Event{
 				Type: "direct_message",
