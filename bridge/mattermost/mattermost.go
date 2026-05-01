@@ -927,7 +927,6 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 		}
 		topic := extraProps["new_header"].(string)
 
-		// DirectMessage
 		if channelType == "D" {
 			event := &bridge.Event{
 				Type: "direct_message",
