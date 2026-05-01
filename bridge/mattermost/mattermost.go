@@ -1517,7 +1517,7 @@ func parseSlackAttachmentMsg(attachments []*model.SlackAttachment) string {
 	msg := ""
 	for _, attachment := range attachments {
 		prefix := "| "
-		// XXX: Figure out how to use mIRC codes here without it being
+		// TODO: Figure out how to use mIRC codes here without it being
 		// stripped further down. With that, also support hex color codes.
 		if attachment.Color == "danger" {
 			prefix = "\033[31m| \033[0m"
