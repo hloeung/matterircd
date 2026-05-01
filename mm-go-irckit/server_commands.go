@@ -337,7 +337,7 @@ func CmdPing(s Server, u *User, msg *irc.Message) error {
 	return nil
 }
 
-// Use static initialisation to optimize.
+// Use static initialization to optimize.
 // Color - https://modern.ircdocs.horse/formatting.html#color
 var colorRegExp = regexp.MustCompile(`\x03([019]?[0-9](,[019]?[0-9])?)?`)
 
