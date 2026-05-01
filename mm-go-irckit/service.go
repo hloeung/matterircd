@@ -130,7 +130,7 @@ func login(u *User, toUser *User, args []string, service string) {
 	}
 
 	switch {
-	// All params provided (server team username password) so set the team to provided.
+	// All params provided (server, team, username, & password) so set the team to provided.
 	case cred.Server != "":
 		cred.Team = teamOrServer
 	// Missing both server and team, let's use DefaultServer and DefaultTeam.
