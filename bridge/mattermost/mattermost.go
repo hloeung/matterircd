@@ -1083,20 +1083,10 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 				msg = "\x01ACTION " + msg + " \x01"
 			} else if data.Type == "slack_attachment" {
 				attachmentMsg := parseSlackAttachmentMsg(data.Attachments())
-				if attachmentMsg == "" {
-					break
-				}
-				if msg == "" {
-					msg = attachmentMsg
-				} else {
-					msg += attachmentMsg
-				}
+				msg += attachmentMsg
 			} else if data.Type == "custom_matterpoll" {
 				pollMsg := parseMatterpollToMsg(data.Attachments())
-				if pollMsg == "" {
-					break
-				}
-				msg = pollMsg + msg
+				msg += pollMsg
 			}
 
 			event := &bridge.Event{
