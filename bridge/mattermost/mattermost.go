@@ -844,6 +844,7 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 }
 
 var validIRCNickRegExp = regexp.MustCompile("^[a-zA-Z0-9_]*$")
+var channelMentionsRegExp = regexp.MustCompile(`@(channel|all|here)\W`)
 
 //nolint:funlen,gocognit,gocyclo,cyclop,forcetypeassert
 func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
@@ -1054,28 +1055,6 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 			if data.Type == "me" {
 				break
 			}
-		case strings.Contains(data.Message, "@channel") || strings.Contains(data.Message, "@here") ||
-			strings.Contains(data.Message, "@all"):
-
-			messageType := "notice"
-			if m.v.GetBool("mattermost.disabledefaultmentions") {
-				messageType = ""
-			}
-			event := &bridge.Event{
-				Type: "channel_message",
-				Data: &bridge.ChannelMessageEvent{
-					Text:        msg,
-					ChannelID:   data.ChannelId,
-					Sender:      ghost,
-					MessageType: messageType,
-					ChannelType: channelType,
-					MessageID:   data.Id,
-					Event:       rmsg.EventType(),
-					ParentID:    data.RootId,
-				},
-			}
-
-			m.eventChan <- event
 		default:
 			if data.Type == "me" {
 				msg = strings.TrimLeft(msg, "*")
@@ -1100,6 +1079,23 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 					Event:       rmsg.EventType(),
 					ParentID:    data.RootId,
 				},
+			}
+
+			if !m.v.GetBool("mattermost.disabledefaultmentions") && channelMentionsRegExp.MatchString(data.Message) {
+				messageType := "notice"
+				event = &bridge.Event{
+					Type: "channel_message",
+					Data: &bridge.ChannelMessageEvent{
+						Text:        msg,
+						ChannelID:   data.ChannelId,
+						Sender:      ghost,
+						MessageType: messageType,
+						ChannelType: channelType,
+						MessageID:   data.Id,
+						Event:       rmsg.EventType(),
+						ParentID:    data.RootId,
+					},
+				}
 			}
 
 			m.eventChan <- event
