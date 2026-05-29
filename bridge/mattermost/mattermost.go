@@ -1529,20 +1529,41 @@ func (m *Mattermost) getDMUser(name interface{}) *bridge.UserInfo {
 func parseMatterpollToMsg(attachments []*model.SlackAttachment) string {
 	msg := ""
 	for _, attachment := range attachments {
-		if strings.HasPrefix(attachment.Text, "This poll has ended.") {
-			return ""
+		prefix := "\033[1;38;2;0;82;204m|\033[0m "
+
+		if attachment.AuthorName != "" {
+			msg += prefix + "@" + attachment.AuthorName + "\n"
+		}
+		if attachment.Title != "" {
+			msg += prefix + "**" + attachment.Title + "**\n"
 		}
 
-		options := ""
 		for _, action := range attachment.Actions {
 			if strings.HasPrefix(action.Id, "vote") {
-				options += "* " + action.Name + "\n"
+				msg += prefix + "• " + action.Name + "\n"
 			}
 		}
 
-		text := strings.TrimSuffix(attachment.Text, "\n")
-		text = strings.Replace(text, "**Total votes**", "*Total votes*", 1)
-		msg = fmt.Sprintf("%s: %s\n%s%s", attachment.AuthorName, attachment.Title, options, text)
+		if attachment.Text != "" {
+			lines := strings.Split(attachment.Text, "\n")
+			for _, text := range lines {
+				msg += prefix + text + "\n"
+			}
+		}
+		if !strings.HasPrefix(attachment.Text, "This poll has ended.") {
+			msg += prefix + "\n"
+			msg += prefix + "*Use the web UI to cast your vote*"
+		}
+
+		for _, field := range attachment.Fields {
+			msg += prefix + "• " + field.Title + ": "
+			lines := strings.Split(fmt.Sprintf("%s", field.Value), "\n")
+			newPrefix := ""
+			for _, text := range lines {
+				msg += newPrefix + text + "\n"
+				newPrefix = prefix
+			}
+		}
 	}
 
 	return msg
