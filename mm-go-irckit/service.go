@@ -483,6 +483,10 @@ func scrollback(u *User, toUser *User, args []string, service string) {
 				}
 				scrollbackUser, _ = u.Srv.HasUser(search)
 			}
+			if search == "" {
+				u.MsgUser(toUser, "no results; either channel not found, no access, or not joined in")
+				return
+			}
 		}
 
 		for _, post := range strings.Split(p.Message, "\n") {
