@@ -758,11 +758,11 @@ var cmds = map[string]Command{
 	"lastsent":         {handler: lastsent, login: true, minParams: 0, maxParams: 0},
 	"logout":           {handler: logout, login: true, minParams: 0, maxParams: 0},
 	"login":            {handler: login, minParams: 2, maxParams: 5},
-	"replay":           {handler: replay, login: true, minParams: 1, maxParams: 2},
 	"part":             {handler: part, login: true, minParams: 1, maxParams: 1},
+	"replay":           {handler: replay, login: true, minParams: 1, maxParams: 2},
+	"scrollback":       {handler: scrollback, login: true, minParams: 2, maxParams: 2},
 	"search":           {handler: search, login: true, minParams: 1, maxParams: -1},
 	"searchusers":      {handler: searchUsers, login: true, minParams: 1, maxParams: -1},
-	"scrollback":       {handler: scrollback, login: true, minParams: 2, maxParams: 2},
 	"updatelastviewed": {handler: updatelastviewed, login: true, minParams: 1, maxParams: 1},
 }
 
