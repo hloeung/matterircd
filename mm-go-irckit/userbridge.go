@@ -679,7 +679,6 @@ func (u *User) addUserToChannelWorker(channels <-chan *bridge.ChannelInfo, throt
 
 		<-throttle.C
 		// exclude direct messages
-		spoof := u.createSpoof(brchannel)
 
 		since := u.br.GetLastViewedAt(brchannel.ID)
 		// ignore invalid/deleted/old channels
