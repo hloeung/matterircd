@@ -208,6 +208,64 @@ func login(u *User, toUser *User, args []string, service string) {
 	u.MsgUser(toUser, "login OK")
 }
 
+//nolint:forcetypeassert,goconst
+func details(u *User, toUser *User, args []string, service string) {
+	if service == "slack" {
+		u.MsgUser(toUser, "not implemented")
+		return
+	}
+
+	if len(args) != 1 {
+		u.MsgUser(toUser, "need DETAILS <post/thread ID>")
+		u.MsgUser(toUser, "e.g. DETAILS zhqrffbxupgepj1yquxaftfk4a")
+		return
+	}
+
+	postID := args[0]
+
+	proto := "https"
+	if u.v.GetBool(u.br.Protocol() + ".insecure") {
+		proto = "http"
+	}
+	postlistURL := proto + "://" + u.Credentials.Server + "/" + u.Credentials.Team + "/pl/"
+
+	switch {
+	case len(postID) == 26:
+		// Do nothing
+	case strings.HasPrefix(postID, "@@"):
+		postID = strings.TrimPrefix(postID, "@@")
+	case strings.HasPrefix(strings.ToLower(postID), postlistURL):
+		postID = strings.TrimPrefix(postID, postlistURL)
+	default:
+		u.MsgUser(toUser, "need DETAILS <post/thread ID>")
+		u.MsgUser(toUser, "e.g. DETAILS zhqrffbxupgepj1yquxaftfk4a")
+		return
+	}
+
+	list := u.br.GetPostThread(postID)
+	if list == nil || list.(*model.PostList) == nil || len(list.(*model.PostList).Order) == 0 {
+		u.MsgUser(toUser, "post not found")
+		return
+	}
+
+	postlist, _ := list.(*model.PostList)
+	post := postlist.Posts[postlist.Order[0]]
+	channel := getMattermostChannelName(u, post.ChannelId)
+	user := u.br.GetUser(post.UserId)
+	nick := user.Nick
+
+	prefix := "\033[1;38;2;0;82;204m|\033[0m "
+	u.MsgUser(toUser, prefix+postlistURL+postID+"\n")
+	if strings.HasPrefix(channel, "#") {
+		u.MsgUser(toUser, prefix+"Channel: "+channel+"\n")
+	}
+	u.MsgUser(toUser, prefix+"User: "+nick+"\n")
+	u.MsgUser(toUser, prefix+"\n")
+	for _, msg := range strings.Split(post.Message, "\n") {
+		u.MsgUser(toUser, prefix+"  "+msg+"\n")
+	}
+}
+
 //nolint:cyclop
 func search(u *User, toUser *User, args []string, service string) {
 	if service == "slack" {
@@ -581,6 +639,7 @@ func updatelastviewed(u *User, toUser *User, args []string, service string) {
 }
 
 var cmds = map[string]Command{
+	"details":          {handler: details, login: true, minParams: 1, maxParams: 1},
 	"lastsent":         {handler: lastsent, login: true, minParams: 0, maxParams: 0},
 	"logout":           {handler: logout, login: true, minParams: 0, maxParams: 0},
 	"login":            {handler: login, minParams: 2, maxParams: 5},
