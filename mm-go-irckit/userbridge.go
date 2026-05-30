@@ -660,30 +660,31 @@ func (u *User) createSpoof(mmchannel *bridge.ChannelInfo) func(string, string, .
 		}
 	}
 
-	channelName := mmchannel.Name
-
-	if mmchannel.TeamID != u.br.GetMe().TeamID || u.v.GetBool(u.br.Protocol()+".prefixmainteam") {
-		channelName = u.br.GetTeamName(mmchannel.TeamID) + "/" + mmchannel.Name
-	}
-
-	u.syncChannel(mmchannel.ID, "#"+channelName)
 	ch := u.Srv.Channel(mmchannel.ID)
 
 	return ch.SpoofMessage
 }
 
-//nolint:funlen,gocognit,gocyclo,cyclop
 func (u *User) addUserToChannelWorker(channels <-chan *bridge.ChannelInfo, throttle *time.Ticker) {
 	for brchannel := range channels {
 		logger.Debug("addUserToChannelWorker", brchannel)
 
 		<-throttle.C
-		// exclude direct messages
 
 		since := u.br.GetLastViewedAt(brchannel.ID)
 		// ignore invalid/deleted/old channels
 		if since == 0 {
 			continue
+		}
+
+		if !strings.Contains(brchannel.Name, "__") {
+			channelName := brchannel.Name
+
+			if brchannel.TeamID != u.br.GetMe().TeamID || u.v.GetBool(u.br.Protocol()+".prefixmainteam") {
+				channelName = u.br.GetTeamName(brchannel.TeamID) + "/" + brchannel.Name
+			}
+
+			u.syncChannel(brchannel.ID, "#"+channelName)
 		}
 
 		args := []string{brchannel.Name, brchannel.TeamID}

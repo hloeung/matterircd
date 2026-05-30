@@ -232,14 +232,14 @@ func replay(u *User, toUser *User, args []string, service string) {
 		return
 	}
 
-	// exclude direct messages
-	spoof := u.createSpoof(brchannel)
-
 	since := u.br.GetLastViewedAt(brchannel.ID)
 	// ignore invalid/deleted/old channels
 	if since == 0 {
 		return
 	}
+
+	// exclude direct messages
+	spoof := u.createSpoof(brchannel)
 
 	logSince := "server"
 	channame := brchannel.Name
