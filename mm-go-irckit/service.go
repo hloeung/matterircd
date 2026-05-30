@@ -212,29 +212,6 @@ func login(u *User, toUser *User, args []string, service string) {
 	u.MsgUser(toUser, "login OK")
 }
 
-func createSpoof(u *User, mmchannel *bridge.ChannelInfo) func(string, string, ...int) {
-	if strings.Contains(mmchannel.Name, "__") {
-		return func(nick string, msg string, maxlen ...int) {
-			if usr, ok := u.Srv.HasUser(nick); ok {
-				u.MsgSpoofUser(usr, u.Nick, msg)
-			} else {
-				logger.Errorf("%s not found for replay msg", nick)
-			}
-		}
-	}
-
-	channelName := mmchannel.Name
-
-	if mmchannel.TeamID != u.br.GetMe().TeamID || u.v.GetBool(u.br.Protocol()+".prefixmainteam") {
-		channelName = u.br.GetTeamName(mmchannel.TeamID) + "/" + mmchannel.Name
-	}
-
-	u.syncChannel(mmchannel.ID, "#"+channelName)
-	ch := u.Srv.Channel(mmchannel.ID)
-
-	return ch.SpoofMessage
-}
-
 //nolint:funlen,gocognit,gocyclo,cyclop
 func replay(u *User, toUser *User, args []string, service string) {
 	if len(args) == 0 || len(args) > 2 {
@@ -256,7 +233,7 @@ func replay(u *User, toUser *User, args []string, service string) {
 	}
 
 	// exclude direct messages
-	spoof := createSpoof(u, brchannel)
+	spoof := u.createSpoof(brchannel)
 
 	since := u.br.GetLastViewedAt(brchannel.ID)
 	// ignore invalid/deleted/old channels
