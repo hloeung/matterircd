@@ -1209,15 +1209,6 @@ func (u *User) handleMessageThreadContext(channelID, messageID, parentID, event,
 
 //nolint:gocyclo
 func (u *User) formatCodeBlockText(text string, prefix string, codeBlockBackTick bool, codeBlockTilde bool, lexer string) (string, bool, bool, string) {
-	// skip empty lines for anything not part of a code block.
-	if text == "" {
-		if codeBlockBackTick || codeBlockTilde {
-			return " ", codeBlockBackTick, codeBlockTilde, lexer
-		}
-		return "", codeBlockBackTick, codeBlockTilde, lexer
-	}
-
-	syntaxHighlighting := u.v.GetString(u.br.Protocol() + ".syntaxhighlighting")
 	linePrefix := u.v.GetString(u.br.Protocol() + ".codeblockprefix")
 	if linePrefix != "" {
 		unq, err := strconv.Unquote(`"` + linePrefix + `"`)
@@ -1225,6 +1216,16 @@ func (u *User) formatCodeBlockText(text string, prefix string, codeBlockBackTick
 			linePrefix = unq
 		}
 	}
+
+	// skip empty lines for anything not part of a code block.
+	if text == "" {
+		if codeBlockBackTick || codeBlockTilde {
+			return linePrefix + " ", codeBlockBackTick, codeBlockTilde, lexer
+		}
+		return "", codeBlockBackTick, codeBlockTilde, lexer
+	}
+
+	syntaxHighlighting := u.v.GetString(u.br.Protocol() + ".syntaxhighlighting")
 
 	if (strings.HasPrefix(text, "```") || strings.HasPrefix(text, prefix+"```")) && !codeBlockTilde {
 		codeBlockBackTick = !codeBlockBackTick
