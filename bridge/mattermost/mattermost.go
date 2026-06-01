@@ -751,6 +751,11 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 		return true
 	}
 
+	// Show own edited / deleted
+	if !m.v.GetBool("disableshowownmodified") && (rmsg.EventType() == model.WebsocketEventPostEdited || rmsg.EventType() == model.WebsocketEventPostDeleted) {
+		return false
+	}
+
 	msgID := data.Id
 	msg := data.Message
 	channel := m.GetChannelName(data.ChannelId)
