@@ -347,9 +347,9 @@ func replay(u *User, toUser *User, args []string, service string) {
 			if showReplayHdr {
 				date := ts.Format("2006-01-02 15:04:05")
 				if brchannel.DM {
-					spoof(nick, fmt.Sprintf("\x02Replaying msgs since %s\x0f (%s)", date, logSince))
+					spoof(nick, fmt.Sprintf("\x02Replaying msgs since %s\x02 \x1d(%s)\x1d", date, logSince))
 				} else {
-					spoof("matterircd", fmt.Sprintf("\x02Replaying msgs since %s\x0f (%s)", date, logSince))
+					spoof("matterircd", fmt.Sprintf("\x02Replaying msgs since %s\x02 \x1d(%s)\x1d", date, logSince))
 				}
 				logger.Infof("Replaying msgs for %s for %s (%s) since %s (%s)", u.Nick, channame, brchannel.ID, date, logSince)
 				showReplayHdr = false
