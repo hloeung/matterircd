@@ -760,8 +760,6 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 		return false
 	}
 
-	msgID := data.Id
-	msg := data.Message
 	channel := m.GetChannelName(data.ChannelId)
 
 	if strings.Contains(channel, "__") {
@@ -769,17 +767,19 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 		channel = receiver.Username
 	}
 
+	msgID := data.Id
+	postfix := ""
 	if data.RootId != "" {
 		msgID = data.RootId
 		if !m.v.GetBool("mattermost.hidereplies") {
-			newMsg, err := m.addParentMsg(data.RootId, data.Message, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
+			newMsg, err := m.addParentMsg(data.RootId, postfix, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
 			if err == nil {
-				msg = newMsg
+				postfix += newMsg
 			}
 		}
 	}
 
-	m.msgLastSentCache.Add(msgID, fmt.Sprintf("%s: %s", channel, msg))
+	m.msgLastSentCache.Add(msgID, fmt.Sprintf("%s: %s", channel, data.Message+postfix))
 
 	logger.Debugf("message is sent from this matterircd instance, not relaying %#v", data.Message)
 	return true
@@ -886,12 +886,13 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 		return
 	}
 
+	postfix := ""
 	if !m.v.GetBool("mattermost.hidereplies") && data.RootId != "" {
-		message, err := m.addParentMsg(data.RootId, data.Message, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
+		message, err := m.addParentMsg(data.RootId, postfix, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
 		if err != nil {
 			logger.Errorf("Unable to get parent post for %#v", data) //nolint:govet
 		}
-		data.Message = message
+		postfix += message
 	}
 
 	// create new "ghost" user
@@ -997,14 +998,14 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 	// msgs := strings.Split(data.Message, "\n")
 	msgs := []string{data.Message}
 
-	postfix := ""
 	// add an edited/deleted string when messages are edited/deleted
 	if len(msgs) > 0 && (rmsg.EventType() == model.WebsocketEventPostEdited ||
 		rmsg.EventType() == model.WebsocketEventPostDeleted) {
-		postfix = " *(edited)*"
 
 		if rmsg.EventType() == model.WebsocketEventPostDeleted {
-			postfix = " *(deleted)*"
+			postfix += " \x1d(deleted)\x1d"
+		} else {
+			postfix += " \x1d(edited)\x1d"
 		}
 
 		// check if we have an edited direct message (channels have __)
@@ -1387,13 +1388,13 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 	}
 
 	var parentUser *bridge.UserInfo
-	rMessage := ""
+	postfix := ""
 	if !m.v.GetBool("mattermost.hidereplies") {
-		message, err := m.addParentMsg(reaction.PostId, "", m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
+		message, err := m.addParentMsg(reaction.PostId, postfix, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
 		if err != nil {
 			logger.Errorf("Unable to get parent post for %#v", reaction)
 		}
-		rMessage = message
+		postfix += message
 	}
 
 	parentID := reaction.PostId
@@ -1413,7 +1414,7 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 				Reaction:    reaction.EmojiName,
 				ChannelType: channelType,
 				ParentUser:  parentUser,
-				Message:     rMessage,
+				Message:     postfix,
 				ParentID:    parentID,
 			},
 		}
@@ -1427,7 +1428,7 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 				Reaction:    reaction.EmojiName,
 				ChannelType: channelType,
 				ParentUser:  parentUser,
-				Message:     rMessage,
+				Message:     postfix,
 				ParentID:    parentID,
 			},
 		}
@@ -1559,7 +1560,7 @@ func parseMatterpollToMsg(attachments []*model.SlackAttachment) string {
 			msg += prefix + "@" + attachment.AuthorName + "\n"
 		}
 		if attachment.Title != "" {
-			msg += prefix + "**" + attachment.Title + "**\n"
+			msg += prefix + "\x02" + attachment.Title + "\x02\n"
 		}
 
 		for _, action := range attachment.Actions {
@@ -1576,7 +1577,7 @@ func parseMatterpollToMsg(attachments []*model.SlackAttachment) string {
 		}
 		if !strings.HasPrefix(attachment.Text, "This poll has ended.") {
 			msg += prefix + "\n"
-			msg += prefix + "*Use the web UI to cast your vote*"
+			msg += prefix + "\x1dUse the web UI to cast your vote\x1d"
 		}
 
 		for _, field := range attachment.Fields {
@@ -1590,7 +1591,7 @@ func parseMatterpollToMsg(attachments []*model.SlackAttachment) string {
 		}
 	}
 
-	return msg
+	return strings.TrimRight(msg, "\n")
 }
 
 //nolint:funlen,gocyclo
@@ -1653,7 +1654,7 @@ func parseMessageAttachments(attachments []*model.SlackAttachment, useFallback b
 		}
 	}
 
-	return msg
+	return strings.TrimRight(msg, "\n")
 }
 
 func (m *Mattermost) GetLastSentMsgs() []string {
