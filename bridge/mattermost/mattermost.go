@@ -48,6 +48,7 @@ func New(v *viper.Viper, cred bridge.Credentials, eventChan chan *bridge.Event, 
 	ourlog := logrus.New()
 	ourlog.SetFormatter(&prefixed.TextFormatter{
 		PrefixPadding: 18,
+		DisableColors: false,
 		FullTimestamp: true,
 	})
 	logger = ourlog.WithFields(logrus.Fields{"prefix": "bridge/mattermost"})
@@ -58,8 +59,6 @@ func New(v *viper.Viper, cred bridge.Credentials, eventChan chan *bridge.Event, 
 	if v.GetBool("trace") {
 		ourlog.SetLevel(logrus.TraceLevel)
 	}
-
-	fmt.Println("loggerlevel:", ourlog.GetLevel())
 
 	mc, err := m.loginToMattermost(onWsConnect)
 	if err != nil {
@@ -840,8 +839,20 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 			return msg, err
 		}
 
+		msg := parentPost.Message
+		if msg == "" {
+			// If we have message attachments and there is a fallback message, use it.
+			if attachments := parentPost.Attachments(); len(attachments) > 0 {
+				if attachments[0].Fallback != "" {
+					msg = attachments[0].Fallback
+				} else if attachments[0].Text != "" {
+					msg = attachments[0].Text
+				}
+			}
+		}
+
 		parentUser := m.GetUser(parentPost.UserId)
-		parentMessage := maybeShorten(parentPost.Message, newLen, uncounted, unicode)
+		parentMessage := maybeShorten(msg, newLen, uncounted, unicode)
 		replyMessage = fmt.Sprintf(" (re @%s: %s)", parentUser.Nick, parentMessage)
 		logger.Debugf("Created reply for parent post %s:%s", parentID, replyMessage)
 
@@ -893,24 +904,6 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 	if ghost == nil {
 		ghost = &bridge.UserInfo{
 			Nick: data.UserId,
-		}
-	}
-
-	// if we got attachments (eg slack attachments) and we have a fallback message, show this.
-	if entries, ok := extraProps["attachments"].([]interface{}); ok {
-		for _, entry := range entries {
-			if f, ok := entry.(map[string]interface{}); ok {
-				if data.Message == "" && f["fallback"].(string) == "" {
-					data.Message = "\n"
-				} else {
-					if data.Message != "" {
-						data.Message += "\n"
-					}
-					if f["fallback"].(string) != "" {
-						data.Message += f["fallback"].(string) + "\n"
-					}
-				}
-			}
 		}
 	}
 
@@ -1072,11 +1065,16 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 				msg = strings.TrimRight(msg, "*")
 				msg = "\x01ACTION " + msg + " \x01"
 			} else if data.Type == "slack_attachment" {
-				attachmentMsg := parseSlackAttachmentMsg(data.Attachments())
+				// https://docs.slack.dev/tools/node-slack-sdk/reference/web-api/interfaces/MessageAttachment/
+				attachmentMsg := parseMessageAttachments(data.Attachments())
 				msg += attachmentMsg
 			} else if data.Type == "custom_matterpoll" {
 				pollMsg := parseMatterpollToMsg(data.Attachments())
 				msg += pollMsg
+			} else if attachments := data.Attachments(); len(attachments) > 0 {
+				// https://developers.mattermost.com/integrate/reference/message-attachments/
+				attachmentMsg := parseMessageAttachments(attachments)
+				msg += attachmentMsg
 			}
 
 			event := &bridge.Event{
@@ -1587,7 +1585,7 @@ func parseMatterpollToMsg(attachments []*model.SlackAttachment) string {
 	return msg
 }
 
-func parseSlackAttachmentMsg(attachments []*model.SlackAttachment) string {
+func parseMessageAttachments(attachments []*model.SlackAttachment) string {
 	msg := ""
 	for _, attachment := range attachments {
 		prefix := "\033[1m|\033[0m "
