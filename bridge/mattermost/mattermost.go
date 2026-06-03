@@ -159,6 +159,8 @@ func (m *Mattermost) handleWsMessage(quitChan chan struct{}) {
 				m.handleWsActionPost(message.Raw)
 			case model.WebsocketEventPostDeleted:
 				m.handleWsActionPost(message.Raw)
+			case model.WebsocketEventEphemeralMessage:
+				m.handleWsActionPost(message.Raw)
 			case model.WebsocketEventUserRemoved:
 				m.handleWsActionUserRemoved(message.Raw)
 			case model.WebsocketEventUserAdded:
