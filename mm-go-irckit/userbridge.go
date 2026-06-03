@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1074,10 +1075,18 @@ func (u *User) handleMessageThreadContext(channelID, messageID, parentID, event,
 
 //nolint:gocyclo
 func (u *User) formatCodeBlockText(text string, prefix string, codeBlockBackTick bool, codeBlockTilde bool, lexer string) (string, bool, bool, string) {
+	linePrefix := u.v.GetString(u.br.Protocol() + ".codeblockprefix")
+	if linePrefix != "" {
+		unq, err := strconv.Unquote(`"` + linePrefix + `"`)
+		if err == nil {
+			linePrefix = unq
+		}
+	}
+
 	// skip empty lines for anything not part of a code block.
 	if text == "" {
 		if codeBlockBackTick || codeBlockTilde {
-			return " ", codeBlockBackTick, codeBlockTilde, lexer
+			return linePrefix + " ", codeBlockBackTick, codeBlockTilde, lexer
 		}
 		return "", codeBlockBackTick, codeBlockTilde, lexer
 	}
@@ -1099,8 +1108,12 @@ func (u *User) formatCodeBlockText(text string, prefix string, codeBlockBackTick
 		return text, codeBlockBackTick, codeBlockTilde, lexer
 	}
 
-	if !(codeBlockBackTick || codeBlockTilde) || syntaxHighlighting == "" || lexer == "" {
+	if !(codeBlockBackTick || codeBlockTilde) {
 		return text, codeBlockBackTick, codeBlockTilde, lexer
+	}
+
+	if syntaxHighlighting == "" || lexer == "" {
+		return linePrefix + text, codeBlockBackTick, codeBlockTilde, lexer
 	}
 
 	formatter := "terminal256"
@@ -1114,7 +1127,7 @@ func (u *User) formatCodeBlockText(text string, prefix string, codeBlockBackTick
 	var b bytes.Buffer
 	err := quick.Highlight(&b, text, lexer, formatter, style)
 	if err == nil {
-		text = b.String()
+		text = linePrefix + b.String()
 		// Work around https://github.com/alecthomas/chroma/issues/716
 		text = strings.ReplaceAll(text, "\n", "")
 	}

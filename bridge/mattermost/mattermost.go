@@ -48,6 +48,7 @@ func New(v *viper.Viper, cred bridge.Credentials, eventChan chan *bridge.Event, 
 	ourlog := logrus.New()
 	ourlog.SetFormatter(&prefixed.TextFormatter{
 		PrefixPadding: 18,
+		DisableColors: false,
 		FullTimestamp: true,
 	})
 	logger = ourlog.WithFields(logrus.Fields{"prefix": "bridge/mattermost"})
@@ -58,8 +59,6 @@ func New(v *viper.Viper, cred bridge.Credentials, eventChan chan *bridge.Event, 
 	if v.GetBool("trace") {
 		ourlog.SetLevel(logrus.TraceLevel)
 	}
-
-	fmt.Println("loggerlevel:", ourlog.GetLevel())
 
 	mc, err := m.loginToMattermost(onWsConnect)
 	if err != nil {
@@ -726,8 +725,13 @@ func isValidNick(s string) bool {
 
 //nolint:forcetypeassert
 func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
+	postData, ok := rmsg.GetData()["post"].(string)
+	if !ok {
+		return true
+	}
+
 	var data model.Post
-	if err := json.NewDecoder(strings.NewReader(rmsg.GetData()["post"].(string))).Decode(&data); err != nil {
+	if err := json.NewDecoder(strings.NewReader(postData)).Decode(&data); err != nil {
 		return true
 	}
 
@@ -751,8 +755,11 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 		return true
 	}
 
-	msgID := data.Id
-	msg := data.Message
+	// Show own edited / deleted
+	if !m.v.GetBool("disableshowownmodified") && (rmsg.EventType() == model.WebsocketEventPostEdited || rmsg.EventType() == model.WebsocketEventPostDeleted) {
+		return false
+	}
+
 	channel := m.GetChannelName(data.ChannelId)
 
 	if strings.Contains(channel, "__") {
@@ -760,17 +767,19 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 		channel = receiver.Username
 	}
 
+	msgID := data.Id
+	postfix := ""
 	if data.RootId != "" {
 		msgID = data.RootId
 		if !m.v.GetBool("mattermost.hidereplies") {
-			newMsg, err := m.addParentMsg(data.RootId, data.Message, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
+			newMsg, err := m.addParentMsg(data.RootId, postfix, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
 			if err == nil {
-				msg = newMsg
+				postfix += newMsg
 			}
 		}
 	}
 
-	m.msgLastSentCache.Add(msgID, fmt.Sprintf("%s: %s", channel, msg))
+	m.msgLastSentCache.Add(msgID, fmt.Sprintf("%s: %s", channel, data.Message+postfix))
 
 	logger.Debugf("message is sent from this matterircd instance, not relaying %#v", data.Message)
 	return true
@@ -830,8 +839,20 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 			return msg, err
 		}
 
+		msg := parentPost.Message
+		if msg == "" {
+			// If we have message attachments and there is a fallback message, use it.
+			if attachments := parentPost.Attachments(); len(attachments) > 0 {
+				if attachments[0].Fallback != "" {
+					msg = attachments[0].Fallback
+				} else if attachments[0].Text != "" {
+					msg = attachments[0].Text
+				}
+			}
+		}
+
 		parentUser := m.GetUser(parentPost.UserId)
-		parentMessage := maybeShorten(parentPost.Message, newLen, uncounted, unicode)
+		parentMessage := maybeShorten(msg, newLen, uncounted, unicode)
 		replyMessage = fmt.Sprintf(" (re @%s: %s)", parentUser.Nick, parentMessage)
 		logger.Debugf("Created reply for parent post %s:%s", parentID, replyMessage)
 
@@ -848,16 +869,16 @@ var channelMentionsRegExp = regexp.MustCompile(`@(channel|all|here)\W`)
 
 //nolint:funlen,gocognit,gocyclo,cyclop,forcetypeassert
 func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
-	if rmsg.GetData()["post"] == nil {
+	wsData := rmsg.GetData()
+	postData, ok := wsData["post"].(string)
+	if !ok {
 		return
 	}
 
 	var data model.Post
-	if err := json.NewDecoder(strings.NewReader(rmsg.GetData()["post"].(string))).Decode(&data); err != nil {
+	if err := json.NewDecoder(strings.NewReader(postData)).Decode(&data); err != nil {
 		return
 	}
-
-	props := rmsg.GetData()
 	extraProps := data.GetProps()
 
 	logger.Debugf("handleWsActionPost() receiving userid %s", data.UserId)
@@ -865,12 +886,13 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 		return
 	}
 
+	postfix := ""
 	if !m.v.GetBool("mattermost.hidereplies") && data.RootId != "" {
-		message, err := m.addParentMsg(data.RootId, data.Message, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
+		message, err := m.addParentMsg(data.RootId, postfix, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
 		if err != nil {
 			logger.Errorf("Unable to get parent post for %#v", data) //nolint:govet
 		}
-		data.Message = message
+		postfix += message
 	}
 
 	// create new "ghost" user
@@ -883,24 +905,6 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 	if ghost == nil {
 		ghost = &bridge.UserInfo{
 			Nick: data.UserId,
-		}
-	}
-
-	// if we got attachments (eg slack attachments) and we have a fallback message, show this.
-	if entries, ok := extraProps["attachments"].([]interface{}); ok {
-		for _, entry := range entries {
-			if f, ok := entry.(map[string]interface{}); ok {
-				if data.Message == "" && f["fallback"].(string) == "" {
-					data.Message = "\n"
-				} else {
-					if data.Message != "" {
-						data.Message += "\n"
-					}
-					if f["fallback"].(string) != "" {
-						data.Message += f["fallback"].(string) + "\n"
-					}
-				}
-			}
 		}
 	}
 
@@ -926,11 +930,13 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 	}
 
 	channelType := ""
-	if t, ok := props["channel_type"].(string); ok {
+	if t, ok := wsData["channel_type"].(string); ok {
 		channelType = t
 	}
-
-	dmchannel, _ := rmsg.GetData()["channel_name"].(string)
+	dmchannel := ""
+	if t, ok := wsData["channel_name"].(string); ok {
+		dmchannel = t
+	}
 
 	if data.Type == model.PostTypeHeaderChange {
 		if _, ok := extraProps["new_header"].(string); !ok {
@@ -992,14 +998,14 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 	// msgs := strings.Split(data.Message, "\n")
 	msgs := []string{data.Message}
 
-	postfix := ""
 	// add an edited/deleted string when messages are edited/deleted
 	if len(msgs) > 0 && (rmsg.EventType() == model.WebsocketEventPostEdited ||
 		rmsg.EventType() == model.WebsocketEventPostDeleted) {
-		postfix = " *(edited)*"
 
 		if rmsg.EventType() == model.WebsocketEventPostDeleted {
-			postfix = " *(deleted)*"
+			postfix += " \x1d(deleted)\x1d"
+		} else {
+			postfix += " \x1d(edited)\x1d"
 		}
 
 		// check if we have an edited direct message (channels have __)
@@ -1060,11 +1066,24 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 				msg = strings.TrimRight(msg, "*")
 				msg = "\x01ACTION " + msg + " \x01"
 			} else if data.Type == "slack_attachment" {
-				attachmentMsg := parseSlackAttachmentMsg(data.Attachments())
+				useFallback := msg == ""
+				// https://docs.slack.dev/tools/node-slack-sdk/reference/web-api/interfaces/MessageAttachment/
+				attachmentMsg := parseMessageAttachments(data.Attachments(), useFallback)
+				if msg != "" && attachmentMsg != "" {
+					msg += "\n"
+				}
 				msg += attachmentMsg
 			} else if data.Type == "custom_matterpoll" {
 				pollMsg := parseMatterpollToMsg(data.Attachments())
 				msg += pollMsg
+			} else if attachments := data.Attachments(); len(attachments) > 0 {
+				useFallback := msg == ""
+				// https://developers.mattermost.com/integrate/reference/message-attachments/
+				attachmentMsg := parseMessageAttachments(attachments, useFallback)
+				if msg != "" && attachmentMsg != "" {
+					msg += "\n"
+				}
+				msg += attachmentMsg
 			}
 
 			event := &bridge.Event{
@@ -1235,18 +1254,19 @@ func (m *Mattermost) handleWsActionUserAdded(rmsg *model.WebSocketEvent) {
 }
 
 func (m *Mattermost) handleWsActionUserRemoved(rmsg *model.WebSocketEvent) {
-	userID, ok := rmsg.GetData()["user_id"].(string)
+	wsData := rmsg.GetData()
+	userID, ok := wsData["user_id"].(string)
 	if !ok {
 		userID = rmsg.GetBroadcast().UserId
 	}
 
-	removerID, ok := rmsg.GetData()["remover_id"].(string)
+	removerID, ok := wsData["remover_id"].(string)
 	if !ok {
 		fmt.Println("not ok removerID", removerID)
 		return
 	}
 
-	channelID, ok := rmsg.GetData()["channel_id"].(string)
+	channelID, ok := wsData["channel_id"].(string)
 	if !ok {
 		channelID = rmsg.GetBroadcast().ChannelId
 	}
@@ -1339,8 +1359,13 @@ func (m *Mattermost) handleStatusChangeEvent(rmsg *model.WebSocketEvent) {
 
 //nolint:forcetypeassert
 func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
+	reactionData, ok := rmsg.GetData()["reaction"].(string)
+	if !ok {
+		return
+	}
+
 	var reaction model.Reaction
-	if err := json.NewDecoder(strings.NewReader(rmsg.GetData()["reaction"].(string))).Decode(&reaction); err != nil {
+	if err := json.NewDecoder(strings.NewReader(reactionData)).Decode(&reaction); err != nil {
 		return
 	}
 
@@ -1363,13 +1388,13 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 	}
 
 	var parentUser *bridge.UserInfo
-	rMessage := ""
+	postfix := ""
 	if !m.v.GetBool("mattermost.hidereplies") {
-		message, err := m.addParentMsg(reaction.PostId, "", m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
+		message, err := m.addParentMsg(reaction.PostId, postfix, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
 		if err != nil {
 			logger.Errorf("Unable to get parent post for %#v", reaction)
 		}
-		rMessage = message
+		postfix += message
 	}
 
 	parentID := reaction.PostId
@@ -1389,7 +1414,7 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 				Reaction:    reaction.EmojiName,
 				ChannelType: channelType,
 				ParentUser:  parentUser,
-				Message:     rMessage,
+				Message:     postfix,
 				ParentID:    parentID,
 			},
 		}
@@ -1403,7 +1428,7 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 				Reaction:    reaction.EmojiName,
 				ChannelType: channelType,
 				ParentUser:  parentUser,
-				Message:     rMessage,
+				Message:     postfix,
 				ParentID:    parentID,
 			},
 		}
@@ -1535,7 +1560,7 @@ func parseMatterpollToMsg(attachments []*model.SlackAttachment) string {
 			msg += prefix + "@" + attachment.AuthorName + "\n"
 		}
 		if attachment.Title != "" {
-			msg += prefix + "**" + attachment.Title + "**\n"
+			msg += prefix + "\x02" + attachment.Title + "\x02\n"
 		}
 
 		for _, action := range attachment.Actions {
@@ -1552,7 +1577,7 @@ func parseMatterpollToMsg(attachments []*model.SlackAttachment) string {
 		}
 		if !strings.HasPrefix(attachment.Text, "This poll has ended.") {
 			msg += prefix + "\n"
-			msg += prefix + "*Use the web UI to cast your vote*"
+			msg += prefix + "\x1dUse the web UI to cast your vote\x1d"
 		}
 
 		for _, field := range attachment.Fields {
@@ -1566,10 +1591,11 @@ func parseMatterpollToMsg(attachments []*model.SlackAttachment) string {
 		}
 	}
 
-	return msg
+	return strings.TrimRight(msg, "\n")
 }
 
-func parseSlackAttachmentMsg(attachments []*model.SlackAttachment) string {
+//nolint:funlen,gocyclo
+func parseMessageAttachments(attachments []*model.SlackAttachment, useFallback bool) string {
 	msg := ""
 	for _, attachment := range attachments {
 		prefix := "\033[1m|\033[0m "
@@ -1588,6 +1614,10 @@ func parseSlackAttachmentMsg(attachments []*model.SlackAttachment) string {
 			bb, _ := strconv.ParseInt(hex[4:6], 16, 0)
 			// https://modern.ircdocs.horse/formatting.html#hex-color
 			prefix = fmt.Sprintf("\033[1;38;2;%d;%d;%dm|\033[0m ", int(rr), int(gg), int(bb))
+		}
+
+		if useFallback {
+			msg += attachment.Fallback + "\n"
 		}
 
 		if attachment.AuthorName != "" {
@@ -1624,7 +1654,7 @@ func parseSlackAttachmentMsg(attachments []*model.SlackAttachment) string {
 		}
 	}
 
-	return msg
+	return strings.TrimRight(msg, "\n")
 }
 
 func (m *Mattermost) GetLastSentMsgs() []string {
