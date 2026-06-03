@@ -1617,7 +1617,7 @@ func parseMessageAttachments(attachments []*model.SlackAttachment, useFallback b
 		}
 
 		if useFallback {
-			msg += attachment.Fallback
+			msg += attachment.Fallback + "\n"
 		}
 
 		if attachment.AuthorName != "" {
