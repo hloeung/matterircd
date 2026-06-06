@@ -35,13 +35,15 @@ run:
 # output configuration options
 output:
   # colored-line-number|line-number|json|tab|checkstyle, default is "colored-line-number"
-  formats: colored-line-number
+  formats:
+    text:
+      colors: true
 
-  # print lines of code with issue, default is true
-  print-issued-lines: true
+      # print lines of code with issue, default is true
+      print-issued-lines: true
 
-  # print linter name in the end of issue text, default is true
-  print-linter-name: true
+      # print linter name in the end of issue text, default is true
+      print-linter-name: true
 
 
 # all available settings of specific linters, we can set an option for
