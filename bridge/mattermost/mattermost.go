@@ -1628,7 +1628,18 @@ func parseMessageAttachments(attachments []*model.SlackAttachment, useFallback b
 		}
 
 		if useFallback {
-			msg += attachment.Fallback + "\n"
+			line, _, _ := strings.Cut(attachment.Fallback, "\n")
+
+			// In some cases, no fallback message present
+			// e.g. https://github.com/fluxcd/notification-controller/pull/1322
+			if line == "" {
+				line, _, _ = strings.Cut(attachment.Text, "\n")
+				if attachment.AuthorName != "" {
+					line = attachment.AuthorName + ": " + line
+				}
+			}
+
+			msg += line + "\n"
 		}
 
 		if attachment.AuthorName != "" {
