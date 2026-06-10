@@ -922,16 +922,6 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 		}
 	}
 
-	if data.Type == model.PostTypeJoinChannel || data.Type == model.PostTypeLeaveChannel ||
-		data.Type == model.PostTypeAddToChannel ||
-		data.Type == model.PostTypeRemoveFromChannel {
-		logger.Debugf("join/leave message. not relaying %#v", data.Message)
-		m.UpdateChannels()
-
-		m.wsActionPostJoinLeave(&data, extraProps)
-		return
-	}
-
 	channelType := ""
 	if t, ok := wsData["channel_type"].(string); ok {
 		channelType = t
@@ -941,7 +931,15 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 		dmchannel = t
 	}
 
-	if data.Type == model.PostTypeHeaderChange {
+	switch data.Type {
+	case model.PostTypeJoinChannel, model.PostTypeLeaveChannel, model.PostTypeAddToChannel, model.PostTypeRemoveFromChannel:
+		logger.Debugf("join/leave message. not relaying %#v", data.Message)
+		_ = m.UpdateChannels()
+
+		m.wsActionPostJoinLeave(&data, extraProps)
+		return
+
+	case model.PostTypeHeaderChange:
 		if _, ok := extraProps["new_header"].(string); !ok {
 			return
 		}
@@ -990,9 +988,8 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 
 		m.eventChan <- event
 		return
-	}
 
-	if data.Type == model.PostTypeSystemGeneric || data.Type == model.PostTypeAddToTeam || data.Type == model.PostTypeRemoveFromTeam {
+	case model.PostTypeSystemGeneric, model.PostTypeEphemeral, model.PostTypeAddToTeam, model.PostTypeRemoveFromTeam:
 		ghost = &bridge.UserInfo{
 			Nick: "system",
 		}
