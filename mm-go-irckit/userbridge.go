@@ -147,14 +147,18 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 		}
 	}
 
-	var text string
 	var showContext bool
 	var maxlen int
 
+	prefixChar := "|"
+	if u.v.GetBool(u.br.Protocol() + ".unicode") {
+		prefixChar = "┃"
+	}
+
+	text := event.Text
 	prefix := ""
 	suffix := ""
 	if event.Event == "dm_topic" {
-		text = event.Text
 		showContext = false
 		maxlen = 0
 	} else {
@@ -162,7 +166,11 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 		if event.Sender.Me {
 			prefixUser = event.Receiver.User
 		}
-		text, prefix, suffix, showContext, maxlen = u.handleMessageThreadContext(prefixUser, event.MessageID, event.ParentID, event.Event, event.Text)
+		// Block quotes
+		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && strings.HasPrefix(text, ">") {
+			text = strings.Replace(text, ">", prefixChar, 1)
+		}
+		text, prefix, suffix, showContext, maxlen = u.handleMessageThreadContext(prefixUser, event.MessageID, event.ParentID, event.Event, text)
 	}
 
 	lexer := ""
@@ -181,6 +189,9 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 
 		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && !codeBlockBackTick && !codeBlockTilde {
 			text = markdown2irc(text)
+			if strings.HasPrefix(text, ">") {
+				text = strings.Replace(text, ">", prefixChar, 1)
+			}
 		}
 
 		if !u.v.GetBool(u.br.Protocol()+".disableemoji") && !codeBlockBackTick && !codeBlockTilde {
@@ -317,15 +328,24 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 		}
 	}
 
+	prefixChar := "|"
+	if u.v.GetBool(u.br.Protocol() + ".unicode") {
+		prefixChar = "┃"
+	}
+
 	text := event.Text
 	prefix := ""
 	suffix := ""
 	showContext := false
 	maxlen := 440
 	if u.Nick != systemUser {
-		text, prefix, suffix, showContext, maxlen = u.handleMessageThreadContext(event.ChannelID, event.MessageID, event.ParentID, event.Event, event.Text)
+		// Block quotes
+		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && strings.HasPrefix(text, ">") {
+			text = strings.Replace(text, ">", prefixChar, 1)
+		}
+		text, prefix, suffix, showContext, maxlen = u.handleMessageThreadContext(event.ChannelID, event.MessageID, event.ParentID, event.Event, text)
 	} else {
-		text = "\x1d" + text + "\x1d"
+		text = "\x1d" + event.Text + "\x1d"
 	}
 
 	lexer := ""
@@ -344,6 +364,9 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 
 		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && !codeBlockBackTick && !codeBlockTilde {
 			text = markdown2irc(text)
+			if strings.HasPrefix(text, ">") {
+				text = strings.Replace(text, ">", prefixChar, 1)
+			}
 		}
 
 		if !u.v.GetBool(u.br.Protocol()+".disableemoji") && !codeBlockBackTick && !codeBlockTilde {

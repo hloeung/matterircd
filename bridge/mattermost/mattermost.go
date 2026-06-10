@@ -889,6 +889,8 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 	}
 
 	useUnicode := m.v.GetBool("mattermost.unicode")
+	disableIrcEphasis := m.v.GetBool("mattermost.disableircemphasis")
+
 	postfix := ""
 	if !m.v.GetBool("mattermost.hidereplies") && data.RootId != "" {
 		message, err := m.addParentMsg(data.RootId, postfix, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", useUnicode)
@@ -1071,7 +1073,7 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 			} else if data.Type == "slack_attachment" {
 				useFallback := msg == ""
 				// https://docs.slack.dev/tools/node-slack-sdk/reference/web-api/interfaces/MessageAttachment/
-				attachmentMsg := parseMessageAttachments(data.Attachments(), useFallback, useUnicode)
+				attachmentMsg := parseMessageAttachments(data.Attachments(), useFallback, useUnicode, disableIrcEphasis)
 				if msg != "" && attachmentMsg != "" {
 					msg += "\n"
 				}
@@ -1082,7 +1084,7 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 			} else if attachments := data.Attachments(); len(attachments) > 0 {
 				useFallback := msg == ""
 				// https://developers.mattermost.com/integrate/reference/message-attachments/
-				attachmentMsg := parseMessageAttachments(attachments, useFallback, useUnicode)
+				attachmentMsg := parseMessageAttachments(attachments, useFallback, useUnicode, disableIrcEphasis)
 				if msg != "" && attachmentMsg != "" {
 					msg += "\n"
 				}
@@ -1602,7 +1604,7 @@ func parseMatterpollToMsg(attachments []*model.SlackAttachment, unicode bool) st
 }
 
 //nolint:funlen,gocognit,gocyclo
-func parseMessageAttachments(attachments []*model.SlackAttachment, useFallback bool, unicode bool) string {
+func parseMessageAttachments(attachments []*model.SlackAttachment, useFallback bool, unicode bool, disableIrcEphasis bool) string {
 	msg := ""
 	prefixChar := "|"
 	if unicode {
@@ -1670,6 +1672,11 @@ func parseMessageAttachments(attachments []*model.SlackAttachment, useFallback b
 			field := attachment.Fields[i]
 			// In case the value has any new lines, strip it to avoid messing with our table format
 			val1Str := strings.TrimPrefix(fmt.Sprintf("%v", field.Value), "\n")
+
+			// Block quotes
+			if !disableIrcEphasis && strings.HasPrefix(val1Str, ">") {
+				val1Str = strings.Replace(val1Str, ">", prefixChar, 1)
+			}
 
 			// Check if this field and the next field are both flagged as "short"
 			if field.Short && i+1 < len(attachment.Fields) && attachment.Fields[i+1].Short {
