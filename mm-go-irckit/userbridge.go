@@ -288,7 +288,7 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 		CHANNEL_GROUP                  = "G"
 	*/
 	nick := sanitizeNick(event.Sender.Nick)
-	logger.Debug("in handleChannelMessageEvent")
+	logger.Debugf("in handleChannelMessageEvent from %s", nick)
 	ch := u.getMessageChannel(event.ChannelID, event.Sender)
 	if event.Sender.Me {
 		nick = u.Nick
