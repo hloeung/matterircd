@@ -854,6 +854,8 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 				}
 			}
 		}
+		// Use only the first line
+		msg, _, _ = strings.Cut(msg, "\n")
 
 		parentUser := m.GetUser(parentPost.UserId)
 		parentMessage := maybeShorten(msg, newLen, uncounted, unicode)
@@ -1620,6 +1622,7 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 		codeBlockPrefix = strings.Replace(codeBlockPrefix, "🮇", "▕", 1)
 		codeBlockPrefix = strings.Replace(codeBlockPrefix, "▎", "▏", 1)
 	}
+	fallbackText := ""
 	for _, attachment := range attachments {
 		prefix := "\033[1m" + prefixChar + "\033[0m "
 		switch {
@@ -1640,18 +1643,26 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 		}
 
 		if useFallback {
-			line, _, _ := strings.Cut(attachment.Fallback, "\n")
+			fallbackText, _, _ = strings.Cut(attachment.Fallback, "\n")
 
 			// In some cases, no fallback message present
 			// e.g. https://github.com/fluxcd/notification-controller/pull/1322
-			if line == "" {
-				line, _, _ = strings.Cut(attachment.Text, "\n")
+			if fallbackText == "" {
+				fallbackText, _, _ = strings.Cut(attachment.Text, "\n")
 				if attachment.AuthorName != "" {
-					line = attachment.AuthorName + ": " + line
+					fallbackText = attachment.AuthorName + ": " + fallbackText
 				}
 			}
 
-			msg += line + "\n"
+			if !disableIrcEphasis {
+				fallbackText = utils.Markdown2irc(fallbackText, blockquoteChar)
+			}
+
+			if !disableEmoji {
+				fallbackText = emoji.ReplaceAliases(fallbackText)
+			}
+
+			msg += fallbackText + "\n"
 		}
 
 		if attachment.AuthorName != "" {
@@ -1731,7 +1742,10 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 				i += 2
 			} else {
 				// Fallback to original behavior for long fields or unpaired short fields
-				msg += prefix + "\x02" + field.Title + "\x02\n"
+
+				if field.Title != "" {
+					msg += prefix + "\x02" + field.Title + "\x02\n"
+				}
 
 				lexer := ""
 				codeBlockBackTick := false
@@ -1746,6 +1760,12 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 
 					if !disableEmoji && !codeBlockBackTick && !codeBlockTilde {
 						text = emoji.ReplaceAliases(text)
+					}
+
+					// Ignore duplicate content when field value is the same as fallback
+					// e.g. https://github.com/jenkinsci/mattermost-plugin/pull/18
+					if text == fallbackText {
+						continue
 					}
 
 					msg += prefix + text + "\n"
