@@ -1036,7 +1036,7 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 			}
 
 			d := &bridge.DirectMessageEvent{
-				Text:      msg + postfix,
+				Text:      strings.TrimRight(msg, "\n") + postfix,
 				ChannelID: data.ChannelId,
 				MessageID: data.Id,
 				Event:     rmsg.EventType(),
@@ -1092,7 +1092,7 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 			event := &bridge.Event{
 				Type: "channel_message",
 				Data: &bridge.ChannelMessageEvent{
-					Text:        msg + postfix,
+					Text:        strings.TrimRight(msg, "\n") + postfix,
 					ChannelID:   data.ChannelId,
 					Sender:      ghost,
 					ChannelType: channelType,
@@ -1107,7 +1107,7 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 				event = &bridge.Event{
 					Type: "channel_message",
 					Data: &bridge.ChannelMessageEvent{
-						Text:        msg + postfix,
+						Text:        strings.TrimRight(msg, "\n") + postfix,
 						ChannelID:   data.ChannelId,
 						Sender:      ghost,
 						MessageType: messageType,
