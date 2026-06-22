@@ -831,6 +831,14 @@ func maybeShorten(msg string, newLen int, uncounted string, unicode bool) string
 func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncounted string, unicode bool) (string, error) {
 	var replyMessage string
 
+	disableIrcEmphasis := m.v.GetBool("mattermost.disableircemphasis")
+	disableEmoji := m.v.GetBool("mattermost.disableemoji")
+	useUnicode := m.v.GetBool("mattermost.unicode")
+	blockquoteChar := "|"
+	if useUnicode {
+		blockquoteChar = "▕"
+	}
+
 	// Search and use cached reply if it exists.
 	// None found, so we'll need to create one and save it for future uses.
 	if v, ok := m.msgParentCache.Get(parentID); !ok {
@@ -854,8 +862,15 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 				}
 			}
 		}
-		// Use only the first line
-		msg, _, _ = strings.Cut(msg, "\n")
+		msg = strings.Replace(msg, "\n", " ", -1)
+
+		if !disableIrcEmphasis {
+			msg = utils.Markdown2irc(msg, blockquoteChar)
+		}
+
+		if !disableEmoji {
+			msg = emoji.ReplaceAliases(msg)
+		}
 
 		parentUser := m.GetUser(parentPost.UserId)
 		parentMessage := maybeShorten(msg, newLen, uncounted, unicode)
@@ -1608,7 +1623,7 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 	useUnicode := m.v.GetBool("mattermost.unicode")
 	syntaxHighlighting := m.v.GetString("mattermost.syntaxhighlighting")
 	codeBlockPrefix := m.v.GetString("mattermost.codeblockprefix")
-	disableIrcEphasis := m.v.GetBool("mattermost.disableircemphasis")
+	disableIrcEmphasis := m.v.GetBool("mattermost.disableircemphasis")
 	disableEmoji := m.v.GetBool("mattermost.disableemoji")
 
 	msg := ""
@@ -1654,7 +1669,7 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 				}
 			}
 
-			if !disableIrcEphasis {
+			if !disableIrcEmphasis {
 				fallbackText = utils.Markdown2irc(fallbackText, blockquoteChar)
 			}
 
@@ -1687,7 +1702,7 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 			for _, text := range lines {
 				text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, "", codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
 
-				if !disableIrcEphasis && !codeBlockBackTick && !codeBlockTilde {
+				if !disableIrcEmphasis && !codeBlockBackTick && !codeBlockTilde {
 					text = utils.Markdown2irc(text, blockquoteChar)
 				}
 
@@ -1708,7 +1723,7 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 			val1Str := strings.TrimPrefix(fmt.Sprintf("%v", field.Value), "\n")
 
 			// Block quotes
-			if !disableIrcEphasis && strings.HasPrefix(val1Str, ">") {
+			if !disableIrcEmphasis && strings.HasPrefix(val1Str, ">") {
 				val1Str = strings.Replace(val1Str, ">", prefixChar, 1)
 			}
 
@@ -1754,7 +1769,7 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 				for _, text := range lines {
 					text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, "", codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
 
-					if !disableIrcEphasis && !codeBlockBackTick && !codeBlockTilde {
+					if !disableIrcEmphasis && !codeBlockBackTick && !codeBlockTilde {
 						text = utils.Markdown2irc(text, blockquoteChar)
 					}
 
