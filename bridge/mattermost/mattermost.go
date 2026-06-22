@@ -739,17 +739,11 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 		return true
 	}
 
-	extraProps := data.GetProps()
-
-	if rmsg.EventType() == model.WebsocketEventPostEdited && data.HasReactions {
-		logger.Debugf("edit post with reactions, do not relay. We don't know if a reaction is added or the post has been edited")
-		return true
-	}
-
 	if data.UserId != m.GetMe().User {
 		return false
 	}
 
+	extraProps := data.GetProps()
 	if tag, ok := extraProps["matterircd_"+m.GetMe().User]; !ok || tag != m.instanceTag {
 		return false
 	}
@@ -862,7 +856,7 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 				}
 			}
 		}
-		msg = strings.Replace(msg, "\n", " ", -1)
+		msg = strings.ReplaceAll(msg, "\n", " ")
 
 		if !disableIrcEmphasis {
 			msg = utils.Markdown2irc(msg, blockquoteChar)
