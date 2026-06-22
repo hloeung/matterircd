@@ -1373,9 +1373,11 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 	}
 
 	userID := m.GetUser(reaction.UserId)
+	sender := userID
+	receiver := m.GetMe()
 
 	// No need to show added/removed reaction messages for our own.
-	if userID.Me {
+	if userID.Me && !m.v.GetBool("mattermost.showownreactions") {
 		logger.Debugf("Not showing own reaction: %s: %s", rmsg.EventType(), reaction.EmojiName)
 		return
 	}
@@ -1384,10 +1386,15 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 
 	channelType := ""
 	channelID := rmsg.GetBroadcast().ChannelId
-
 	name := m.GetChannelName(channelID)
 	if strings.Contains(name, "__") {
 		channelType = "D"
+		if userID.Me {
+			receiver = m.getDMUser(name)
+		} else {
+			receiver = sender
+			sender = m.getDMUser(name)
+		}
 	}
 
 	var parentUser *bridge.UserInfo
@@ -1413,7 +1420,8 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 			Data: &bridge.ReactionAddEvent{
 				ChannelID:   channelID,
 				MessageID:   reaction.PostId,
-				Sender:      userID,
+				Receiver:    receiver,
+				Sender:      sender,
 				Reaction:    reaction.EmojiName,
 				ChannelType: channelType,
 				ParentUser:  parentUser,
@@ -1427,7 +1435,8 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 			Data: &bridge.ReactionRemoveEvent{
 				ChannelID:   channelID,
 				MessageID:   reaction.PostId,
-				Sender:      userID,
+				Receiver:    receiver,
+				Sender:      sender,
 				Reaction:    reaction.EmojiName,
 				ChannelType: channelType,
 				ParentUser:  parentUser,
