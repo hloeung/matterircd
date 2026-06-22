@@ -734,6 +734,15 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 		return true
 	}
 
+	disableIrcEmphasis := m.v.GetBool("mattermost.disableircemphasis")
+	disableEmoji := m.v.GetBool("mattermost.disableemoji")
+	useUnicode := m.v.GetBool("mattermost.unicode")
+	blockquoteChar := "|"
+	if useUnicode {
+		blockquoteChar = "▕"
+	}
+	shortenMsgLen := m.v.GetInt("mattermost.ShortenRepliesTo")
+
 	var data model.Post
 	if err := json.NewDecoder(strings.NewReader(postData)).Decode(&data); err != nil {
 		return true
@@ -770,14 +779,25 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 	if data.RootId != "" {
 		msgID = data.RootId
 		if !m.v.GetBool("mattermost.hidereplies") {
-			newMsg, err := m.addParentMsg(data.RootId, postfix, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
+			newMsg, err := m.addParentMsg(data.RootId, postfix, shortenMsgLen, "@", useUnicode)
 			if err == nil {
 				postfix += newMsg
 			}
 		}
 	}
 
-	m.msgLastSentCache.Add(msgID, fmt.Sprintf("%s: %s", channel, data.Message+postfix))
+	lastSentMsg := strings.ReplaceAll(data.Message, "\n", " ")
+
+	if !disableIrcEmphasis {
+		lastSentMsg = utils.Markdown2irc(lastSentMsg, blockquoteChar)
+	}
+
+	if !disableEmoji {
+		lastSentMsg = emoji.ReplaceAliases(lastSentMsg)
+	}
+
+	lastSentMsg = maybeShorten(lastSentMsg, shortenMsgLen, "@", useUnicode)
+	m.msgLastSentCache.Add(msgID, fmt.Sprintf("%s: %s", channel, lastSentMsg+postfix))
 
 	logger.Debugf("message is sent from this matterircd instance, not relaying %#v", data.Message)
 	return true
