@@ -177,10 +177,17 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 	codeBlockPrefix := u.v.GetString(u.br.Protocol() + ".codeblockprefix")
 	text = wordwrap.String(text, maxlen)
 	lines := strings.Split(text, "\n")
+	addPrefix := false
 	for _, text := range lines {
 
+		// Remove messgae thread context prefix for formatting and remember to add it back
+		if !addPrefix && u.v.GetBool(u.br.Protocol()+".prefixcontext") && !u.v.GetBool(u.br.Protocol()+".showcontextmulti") && strings.HasPrefix(text, prefix) {
+			text = strings.TrimPrefix(text, prefix)
+			addPrefix = true
+		}
+
 		// TODO: Ideally, we want to read the whole code block and syntax highlight on that, but let's go with per-line for now.
-		text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, prefix, codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
+		text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
 
 		if text == "" {
 			continue
@@ -194,8 +201,9 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 			text = emoji.ReplaceAliases(text)
 		}
 
-		if showContext {
+		if showContext || addPrefix {
 			text = prefix + text + suffix
+			addPrefix = false
 		}
 
 		if event.Sender.Me {
@@ -351,10 +359,17 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 	codeBlockPrefix := u.v.GetString(u.br.Protocol() + ".codeblockprefix")
 	text = wordwrap.String(text, maxlen)
 	lines := strings.Split(text, "\n")
+	addPrefix := false
 	for _, text := range lines {
 
+		// Remove messgae thread context prefix for formatting and remember to add it back
+		if !addPrefix && u.v.GetBool(u.br.Protocol()+".prefixcontext") && !u.v.GetBool(u.br.Protocol()+".showcontextmulti") && strings.HasPrefix(text, prefix) {
+			text = strings.TrimPrefix(text, prefix)
+			addPrefix = true
+		}
+
 		// TODO: Ideally, we want to read the whole code block and syntax highlight on that, but let's go with per-line for now.
-		text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, prefix, codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
+		text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
 
 		if text == "" {
 			continue
@@ -368,8 +383,9 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 			text = emoji.ReplaceAliases(text)
 		}
 
-		if showContext {
+		if showContext || addPrefix {
 			text = prefix + text + suffix
+			addPrefix = false
 		}
 
 		switch event.MessageType {
@@ -1189,12 +1205,12 @@ func (u *User) getMattermostVersion() string {
 }
 
 func (u *User) handleMessageThreadContext(channelID, messageID, parentID, event, text string) (string, string, string, bool, int) {
-	newText := text
 	prefix := ""
 	suffix := ""
 	maxlen := 440
 	showContext := false
 
+	newText := text
 	switch {
 	case u.v.GetBool(u.br.Protocol()+".prefixcontext") && strings.HasPrefix(text, "\x01"):
 		prefix = u.prefixContext(channelID, messageID, parentID, event) + " "
@@ -1202,7 +1218,6 @@ func (u *User) handleMessageThreadContext(channelID, messageID, parentID, event,
 		maxlen = len(newText)
 	case u.v.GetBool(u.br.Protocol()+".prefixcontext") && u.v.GetBool(u.br.Protocol()+".showcontextmulti"):
 		prefix = u.prefixContext(channelID, messageID, parentID, event) + " "
-		newText = text
 		showContext = true
 		maxlen -= len(prefix)
 	case u.v.GetBool(u.br.Protocol() + ".prefixcontext"):
@@ -1214,7 +1229,6 @@ func (u *User) handleMessageThreadContext(channelID, messageID, parentID, event,
 		maxlen = len(newText)
 	case u.v.GetBool(u.br.Protocol()+".suffixcontext") && u.v.GetBool(u.br.Protocol()+".showcontextmulti"):
 		suffix = " " + u.prefixContext(channelID, messageID, parentID, event)
-		newText = text
 		showContext = true
 		maxlen -= len(suffix)
 	case u.v.GetBool(u.br.Protocol() + ".suffixcontext"):

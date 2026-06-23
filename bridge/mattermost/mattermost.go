@@ -882,6 +882,9 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 			}
 		}
 		msg = strings.ReplaceAll(msg, "\n", " ")
+		// Since we're combining multi lines into one, make code blocks single code/monospace
+		msg = strings.ReplaceAll(msg, "```", "`")
+		msg = strings.ReplaceAll(msg, "~~~", "`")
 
 		if !disableIrcEmphasis {
 			msg = utils.Markdown2irc(msg, blockquoteChar)
@@ -1726,7 +1729,7 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 			codeBlockTilde := false
 			lines := strings.Split(attachment.Text, "\n")
 			for _, text := range lines {
-				text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, "", codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
+				text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
 
 				if !disableIrcEmphasis && !codeBlockBackTick && !codeBlockTilde {
 					text = utils.Markdown2irc(text, blockquoteChar)
@@ -1793,7 +1796,7 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 				codeBlockTilde := false
 				lines := strings.Split(val1Str, "\n")
 				for _, text := range lines {
-					text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, "", codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
+					text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
 
 					if !disableIrcEmphasis && !codeBlockBackTick && !codeBlockTilde {
 						text = utils.Markdown2irc(text, blockquoteChar)
