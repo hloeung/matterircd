@@ -32,7 +32,8 @@ func FormatCodeBlockText(text string, prefix string, codeBlockBackTick bool, cod
 		if codeBlockBackTick {
 			lexer = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(text, "```"), prefix+"```"))
 			if lexer != "" {
-				newText = strings.Replace(text, "```", linePrefix, 1)
+				newText = strings.Replace(text, "``` ", linePrefix, 1)
+				newText = strings.Replace(newText, "```", linePrefix, 1)
 				newText = strings.Replace(newText, lexer, "\x16"+lexer+"\x16", 1)
 			}
 		}
@@ -44,7 +45,8 @@ func FormatCodeBlockText(text string, prefix string, codeBlockBackTick bool, cod
 		if codeBlockTilde {
 			lexer = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(text, "~~~"), prefix+"~~~"))
 			if lexer != "" {
-				newText = strings.Replace(text, "~~~", linePrefix, 1)
+				newText = strings.Replace(text, "~~~ ", linePrefix, 1)
+				newText = strings.Replace(newText, "~~~", linePrefix, 1)
 				newText = strings.Replace(newText, lexer, "\x16"+lexer+"\x16", 1)
 			}
 		}

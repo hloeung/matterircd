@@ -801,6 +801,7 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 		lastSentMsg = emoji.ReplaceAliases(lastSentMsg)
 	}
 
+	lastSentMsg = maybeShorten(lastSentMsg, 90, "@", useUnicode)
 	m.msgLastSentCache.Add(msgID, fmt.Sprintf("%s: %s", channel, lastSentMsg+postfix))
 
 	logger.Debugf("message is sent from this matterircd instance, not relaying %#v", data.Message)
