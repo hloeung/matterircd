@@ -727,6 +727,11 @@ func isValidNick(s string) bool {
 	return true
 }
 
+const (
+	blockquoteCharNonUnicode = "|"
+	blockquoteCharUnicode    = "▕"
+)
+
 //nolint:forcetypeassert
 func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 	postData, ok := rmsg.GetData()["post"].(string)
@@ -737,9 +742,9 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 	disableIrcEmphasis := m.v.GetBool("mattermost.disableircemphasis")
 	disableEmoji := m.v.GetBool("mattermost.disableemoji")
 	useUnicode := m.v.GetBool("mattermost.unicode")
-	blockquoteChar := "|"
+	blockquoteChar := blockquoteCharNonUnicode
 	if useUnicode {
-		blockquoteChar = "▕"
+		blockquoteChar = blockquoteCharUnicode
 	}
 	shortenMsgLen := m.v.GetInt("mattermost.ShortenRepliesTo")
 
@@ -796,7 +801,6 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 		lastSentMsg = emoji.ReplaceAliases(lastSentMsg)
 	}
 
-	lastSentMsg = maybeShorten(lastSentMsg, shortenMsgLen, "@", useUnicode)
 	m.msgLastSentCache.Add(msgID, fmt.Sprintf("%s: %s", channel, lastSentMsg+postfix))
 
 	logger.Debugf("message is sent from this matterircd instance, not relaying %#v", data.Message)
@@ -848,9 +852,9 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 	disableIrcEmphasis := m.v.GetBool("mattermost.disableircemphasis")
 	disableEmoji := m.v.GetBool("mattermost.disableemoji")
 	useUnicode := m.v.GetBool("mattermost.unicode")
-	blockquoteChar := "|"
+	blockquoteChar := blockquoteCharNonUnicode
 	if useUnicode {
-		blockquoteChar = "▕"
+		blockquoteChar = blockquoteCharUnicode
 	}
 
 	// Search and use cached reply if it exists.
@@ -899,8 +903,10 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 	return strings.TrimRight(msg, "\n") + replyMessage, nil
 }
 
-var validIRCNickRegExp = regexp.MustCompile("^[a-zA-Z0-9_]*$")
-var channelMentionsRegExp = regexp.MustCompile(`@(channel|all|here)\W`)
+var (
+	validIRCNickRegExp    = regexp.MustCompile("^[a-zA-Z0-9_]*$")
+	channelMentionsRegExp = regexp.MustCompile(`@(channel|all|here)\W`)
+)
 
 //nolint:funlen,gocognit,gocyclo,cyclop,forcetypeassert
 func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
@@ -1585,11 +1591,16 @@ func (m *Mattermost) getDMUser(name interface{}) *bridge.UserInfo {
 	return nil
 }
 
+const (
+	messageAttachmentCharNonUnicode = "|"
+	messageAttachmentCharUnicode    = "🮇"
+)
+
 func parseMatterpollToMsg(attachments []*model.SlackAttachment, unicode bool) string {
 	msg := ""
-	prefixChar := "|"
+	prefixChar := messageAttachmentCharNonUnicode
 	if unicode {
-		prefixChar = "🮇"
+		prefixChar = messageAttachmentCharUnicode
 	}
 	for _, attachment := range attachments {
 		prefix := "\033[1;38;2;0;82;204m" + prefixChar + "\033[0m "
@@ -1641,11 +1652,11 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 	disableEmoji := m.v.GetBool("mattermost.disableemoji")
 
 	msg := ""
-	prefixChar := "|"
-	blockquoteChar := "|"
+	prefixChar := messageAttachmentCharNonUnicode
+	blockquoteChar := blockquoteCharNonUnicode
 	if useUnicode {
-		prefixChar = "🮇"
-		blockquoteChar = "▕"
+		prefixChar = messageAttachmentCharUnicode
+		blockquoteChar = blockquoteCharUnicode
 		// Downgrade heavy vertical to light as we're using heavy already
 		codeBlockPrefix = strings.Replace(codeBlockPrefix, "┃", "│", 1)
 		codeBlockPrefix = strings.Replace(codeBlockPrefix, "🮇", "▕", 1)
