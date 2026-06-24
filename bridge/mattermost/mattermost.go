@@ -1376,7 +1376,7 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 	sender := userID
 	receiver := m.GetMe()
 
-	// No need to show added/removed reaction messages for our own.
+	// Don't show our own reaction messages unless mattermost.showownreactions is enabled.
 	if userID.Me && !m.v.GetBool("mattermost.showownreactions") {
 		logger.Debugf("Not showing own reaction: %s: %s", rmsg.EventType(), reaction.EmojiName)
 		return
@@ -1389,6 +1389,11 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 	name := m.GetChannelName(channelID)
 	if strings.Contains(name, "__") {
 		channelType = "D"
+		dmUser := m.getDMUser(name)
+		if dmUser == nil {
+			logger.Errorf("reaction: unable to resolve DM peer for channel %q", name)
+			return
+		}
 		if userID.Me {
 			receiver = m.getDMUser(name)
 		} else {
