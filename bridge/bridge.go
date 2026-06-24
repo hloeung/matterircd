@@ -158,6 +158,7 @@ type FileEvent struct {
 }
 
 type ReactionAddEvent struct {
+	Receiver    *UserInfo
 	Sender      *UserInfo
 	ChannelID   string
 	MessageID   string

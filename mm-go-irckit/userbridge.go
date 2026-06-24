@@ -491,7 +491,7 @@ func (u *User) handleStatusChangeEvent(event *bridge.StatusChangeEvent) {
 func (u *User) handleReactionEvent(event interface{}) {
 	var (
 		text, channelID, messageID, parentID, channelType, reaction string
-		sender                                                      *bridge.UserInfo
+		receiver, sender                                            *bridge.UserInfo
 	)
 
 	message := ""
@@ -502,6 +502,7 @@ func (u *User) handleReactionEvent(event interface{}) {
 		text = "added reaction: "
 		channelID = e.ChannelID
 		messageID = e.MessageID
+		receiver = e.Receiver
 		sender = e.Sender
 		channelType = e.ChannelType
 		reaction = e.Reaction
@@ -511,6 +512,7 @@ func (u *User) handleReactionEvent(event interface{}) {
 		text = "removed reaction: "
 		channelID = e.ChannelID
 		messageID = e.MessageID
+		receiver = e.Receiver
 		sender = e.Sender
 		channelType = e.ChannelType
 		reaction = e.Reaction
@@ -535,7 +537,7 @@ func (u *User) handleReactionEvent(event interface{}) {
 		e := &bridge.DirectMessageEvent{
 			Text:      "\x1d" + text + reaction + "\x1d" + message,
 			ChannelID: channelID,
-			Receiver:  u.UserInfo,
+			Receiver:  receiver,
 			Sender:    sender,
 			MessageID: messageID,
 			Event:     "reaction",
