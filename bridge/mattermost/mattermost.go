@@ -727,6 +727,11 @@ func isValidNick(s string) bool {
 	return true
 }
 
+const (
+	blockquoteCharNonUnicode = "|"
+	blockquoteCharUnicode    = "▕"
+)
+
 //nolint:forcetypeassert
 func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 	postData, ok := rmsg.GetData()["post"].(string)
@@ -734,15 +739,17 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 		return true
 	}
 
+	disableIrcEmphasis := m.v.GetBool("mattermost.disableircemphasis")
+	disableEmoji := m.v.GetBool("mattermost.disableemoji")
+	useUnicode := m.v.GetBool("mattermost.unicode")
+	blockquoteChar := blockquoteCharNonUnicode
+	if useUnicode {
+		blockquoteChar = blockquoteCharUnicode
+	}
+	shortenMsgLen := m.v.GetInt("mattermost.ShortenRepliesTo")
+
 	var data model.Post
 	if err := json.NewDecoder(strings.NewReader(postData)).Decode(&data); err != nil {
-		return true
-	}
-
-	extraProps := data.GetProps()
-
-	if rmsg.EventType() == model.WebsocketEventPostEdited && data.HasReactions {
-		logger.Debugf("edit post with reactions, do not relay. We don't know if a reaction is added or the post has been edited")
 		return true
 	}
 
@@ -750,6 +757,7 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 		return false
 	}
 
+	extraProps := data.GetProps()
 	if tag, ok := extraProps["matterircd_"+m.GetMe().User]; !ok || tag != m.instanceTag {
 		return false
 	}
@@ -776,14 +784,25 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 	if data.RootId != "" {
 		msgID = data.RootId
 		if !m.v.GetBool("mattermost.hidereplies") {
-			newMsg, err := m.addParentMsg(data.RootId, postfix, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
+			newMsg, err := m.addParentMsg(data.RootId, postfix, shortenMsgLen, "@", useUnicode)
 			if err == nil {
 				postfix += newMsg
 			}
 		}
 	}
 
-	m.msgLastSentCache.Add(msgID, fmt.Sprintf("%s: %s", channel, data.Message+postfix))
+	lastSentMsg := strings.ReplaceAll(data.Message, "\n", " ")
+
+	if !disableIrcEmphasis {
+		lastSentMsg = utils.Markdown2irc(lastSentMsg, blockquoteChar)
+	}
+
+	if !disableEmoji {
+		lastSentMsg = emoji.ReplaceAliases(lastSentMsg)
+	}
+
+	lastSentMsg = maybeShorten(lastSentMsg, 90, "@", useUnicode)
+	m.msgLastSentCache.Add(msgID, fmt.Sprintf("%s: %s", channel, lastSentMsg+postfix))
 
 	logger.Debugf("message is sent from this matterircd instance, not relaying %#v", data.Message)
 	return true
@@ -831,6 +850,14 @@ func maybeShorten(msg string, newLen int, uncounted string, unicode bool) string
 func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncounted string, unicode bool) (string, error) {
 	var replyMessage string
 
+	disableIrcEmphasis := m.v.GetBool("mattermost.disableircemphasis")
+	disableEmoji := m.v.GetBool("mattermost.disableemoji")
+	useUnicode := m.v.GetBool("mattermost.unicode")
+	blockquoteChar := blockquoteCharNonUnicode
+	if useUnicode {
+		blockquoteChar = blockquoteCharUnicode
+	}
+
 	// Search and use cached reply if it exists.
 	// None found, so we'll need to create one and save it for future uses.
 	if v, ok := m.msgParentCache.Get(parentID); !ok {
@@ -854,6 +881,18 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 				}
 			}
 		}
+		msg = strings.ReplaceAll(msg, "\n", " ")
+		// Since we're combining multi lines into one, make code blocks single code/monospace
+		msg = strings.ReplaceAll(msg, "```", "`")
+		msg = strings.ReplaceAll(msg, "~~~", "`")
+
+		if !disableIrcEmphasis {
+			msg = utils.Markdown2irc(msg, blockquoteChar)
+		}
+
+		if !disableEmoji {
+			msg = emoji.ReplaceAliases(msg)
+		}
 
 		parentUser := m.GetUser(parentPost.UserId)
 		parentMessage := maybeShorten(msg, newLen, uncounted, unicode)
@@ -868,8 +907,10 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 	return strings.TrimRight(msg, "\n") + replyMessage, nil
 }
 
-var validIRCNickRegExp = regexp.MustCompile("^[a-zA-Z0-9_]*$")
-var channelMentionsRegExp = regexp.MustCompile(`@(channel|all|here)\W`)
+var (
+	validIRCNickRegExp    = regexp.MustCompile("^[a-zA-Z0-9_]*$")
+	channelMentionsRegExp = regexp.MustCompile(`@(channel|all|here)\W`)
+)
 
 //nolint:funlen,gocognit,gocyclo,cyclop,forcetypeassert
 func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
@@ -1554,11 +1595,16 @@ func (m *Mattermost) getDMUser(name interface{}) *bridge.UserInfo {
 	return nil
 }
 
+const (
+	messageAttachmentCharNonUnicode = "|"
+	messageAttachmentCharUnicode    = "🮇"
+)
+
 func parseMatterpollToMsg(attachments []*model.SlackAttachment, unicode bool) string {
 	msg := ""
-	prefixChar := "|"
+	prefixChar := messageAttachmentCharNonUnicode
 	if unicode {
-		prefixChar = "🮇"
+		prefixChar = messageAttachmentCharUnicode
 	}
 	for _, attachment := range attachments {
 		prefix := "\033[1;38;2;0;82;204m" + prefixChar + "\033[0m "
@@ -1606,20 +1652,21 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 	useUnicode := m.v.GetBool("mattermost.unicode")
 	syntaxHighlighting := m.v.GetString("mattermost.syntaxhighlighting")
 	codeBlockPrefix := m.v.GetString("mattermost.codeblockprefix")
-	disableIrcEphasis := m.v.GetBool("mattermost.disableircemphasis")
+	disableIrcEmphasis := m.v.GetBool("mattermost.disableircemphasis")
 	disableEmoji := m.v.GetBool("mattermost.disableemoji")
 
 	msg := ""
-	prefixChar := "|"
-	blockquoteChar := "|"
+	prefixChar := messageAttachmentCharNonUnicode
+	blockquoteChar := blockquoteCharNonUnicode
 	if useUnicode {
-		prefixChar = "🮇"
-		blockquoteChar = "▕"
+		prefixChar = messageAttachmentCharUnicode
+		blockquoteChar = blockquoteCharUnicode
 		// Downgrade heavy vertical to light as we're using heavy already
 		codeBlockPrefix = strings.Replace(codeBlockPrefix, "┃", "│", 1)
 		codeBlockPrefix = strings.Replace(codeBlockPrefix, "🮇", "▕", 1)
 		codeBlockPrefix = strings.Replace(codeBlockPrefix, "▎", "▏", 1)
 	}
+	fallbackText := ""
 	for _, attachment := range attachments {
 		prefix := "\033[1m" + prefixChar + "\033[0m "
 		switch {
@@ -1640,18 +1687,26 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 		}
 
 		if useFallback {
-			line, _, _ := strings.Cut(attachment.Fallback, "\n")
+			fallbackText, _, _ = strings.Cut(attachment.Fallback, "\n")
 
 			// In some cases, no fallback message present
 			// e.g. https://github.com/fluxcd/notification-controller/pull/1322
-			if line == "" {
-				line, _, _ = strings.Cut(attachment.Text, "\n")
+			if fallbackText == "" {
+				fallbackText, _, _ = strings.Cut(attachment.Text, "\n")
 				if attachment.AuthorName != "" {
-					line = attachment.AuthorName + ": " + line
+					fallbackText = attachment.AuthorName + ": " + fallbackText
 				}
 			}
 
-			msg += line + "\n"
+			if !disableIrcEmphasis {
+				fallbackText = utils.Markdown2irc(fallbackText, blockquoteChar)
+			}
+
+			if !disableEmoji {
+				fallbackText = emoji.ReplaceAliases(fallbackText)
+			}
+
+			msg += fallbackText + "\n"
 		}
 
 		if attachment.AuthorName != "" {
@@ -1674,9 +1729,9 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 			codeBlockTilde := false
 			lines := strings.Split(attachment.Text, "\n")
 			for _, text := range lines {
-				text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, "", codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
+				text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
 
-				if !disableIrcEphasis && !codeBlockBackTick && !codeBlockTilde {
+				if !disableIrcEmphasis && !codeBlockBackTick && !codeBlockTilde {
 					text = utils.Markdown2irc(text, blockquoteChar)
 				}
 
@@ -1697,7 +1752,7 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 			val1Str := strings.TrimPrefix(fmt.Sprintf("%v", field.Value), "\n")
 
 			// Block quotes
-			if !disableIrcEphasis && strings.HasPrefix(val1Str, ">") {
+			if !disableIrcEmphasis && strings.HasPrefix(val1Str, ">") {
 				val1Str = strings.Replace(val1Str, ">", prefixChar, 1)
 			}
 
@@ -1731,21 +1786,30 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 				i += 2
 			} else {
 				// Fallback to original behavior for long fields or unpaired short fields
-				msg += prefix + "\x02" + field.Title + "\x02\n"
+
+				if field.Title != "" {
+					msg += prefix + "\x02" + field.Title + "\x02\n"
+				}
 
 				lexer := ""
 				codeBlockBackTick := false
 				codeBlockTilde := false
 				lines := strings.Split(val1Str, "\n")
 				for _, text := range lines {
-					text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, "", codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
+					text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
 
-					if !disableIrcEphasis && !codeBlockBackTick && !codeBlockTilde {
+					if !disableIrcEmphasis && !codeBlockBackTick && !codeBlockTilde {
 						text = utils.Markdown2irc(text, blockquoteChar)
 					}
 
 					if !disableEmoji && !codeBlockBackTick && !codeBlockTilde {
 						text = emoji.ReplaceAliases(text)
+					}
+
+					// Ignore duplicate content when field value is the same as fallback
+					// e.g. https://github.com/jenkinsci/mattermost-plugin/pull/18
+					if useFallback && fallbackText != "" && text == fallbackText {
+						continue
 					}
 
 					msg += prefix + text + "\n"

@@ -10,7 +10,7 @@ import (
 )
 
 //nolint:funlen,gocyclo
-func FormatCodeBlockText(text string, prefix string, codeBlockBackTick bool, codeBlockTilde bool, lexer string, syntaxHighlighting string, linePrefix string) (string, bool, bool, string) {
+func FormatCodeBlockText(text string, codeBlockBackTick bool, codeBlockTilde bool, lexer string, syntaxHighlighting string, linePrefix string) (string, bool, bool, string) {
 	if linePrefix != "" {
 		unq, err := strconv.Unquote(`"` + linePrefix + `"`)
 		if err == nil {
@@ -26,25 +26,27 @@ func FormatCodeBlockText(text string, prefix string, codeBlockBackTick bool, cod
 		return "", codeBlockBackTick, codeBlockTilde, lexer
 	}
 
-	if (strings.HasPrefix(text, "```") || strings.HasPrefix(text, prefix+"```")) && !codeBlockTilde {
+	if strings.HasPrefix(text, "```") && !codeBlockTilde {
 		codeBlockBackTick = !codeBlockBackTick
 		newText := ""
 		if codeBlockBackTick {
-			lexer = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(text, "```"), prefix+"```"))
+			lexer = strings.TrimSpace(strings.TrimPrefix(text, "```"))
 			if lexer != "" {
-				newText = strings.Replace(text, "```", linePrefix, 1)
+				newText = strings.Replace(text, "``` ", linePrefix, 1)
+				newText = strings.Replace(newText, "```", linePrefix, 1)
 				newText = strings.Replace(newText, lexer, "\x16"+lexer+"\x16", 1)
 			}
 		}
 		return newText, codeBlockBackTick, codeBlockTilde, lexer
 	}
-	if (strings.HasPrefix(text, "~~~") || strings.HasPrefix(text, prefix+"~~~")) && !codeBlockBackTick {
+	if strings.HasPrefix(text, "~~~") && !codeBlockBackTick {
 		codeBlockTilde = !codeBlockTilde
 		newText := ""
 		if codeBlockTilde {
-			lexer = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(text, "~~~"), prefix+"~~~"))
+			lexer = strings.TrimSpace(strings.TrimPrefix(text, "~~~"))
 			if lexer != "" {
-				newText = strings.Replace(text, "~~~", linePrefix, 1)
+				newText = strings.Replace(text, "~~~ ", linePrefix, 1)
+				newText = strings.Replace(newText, "~~~", linePrefix, 1)
 				newText = strings.Replace(newText, lexer, "\x16"+lexer+"\x16", 1)
 			}
 		}
