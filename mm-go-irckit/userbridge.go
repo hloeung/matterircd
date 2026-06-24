@@ -180,7 +180,7 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 	addPrefix := false
 	for _, text := range lines {
 
-		// Remove messgae thread context prefix for formatting and remember to add it back
+		// Remove message thread context prefix for formatting and remember to add it back
 		if !addPrefix && u.v.GetBool(u.br.Protocol()+".prefixcontext") && !u.v.GetBool(u.br.Protocol()+".showcontextmulti") && strings.HasPrefix(text, prefix) {
 			text = strings.TrimPrefix(text, prefix)
 			addPrefix = true
@@ -189,7 +189,7 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 		// TODO: Ideally, we want to read the whole code block and syntax highlight on that, but let's go with per-line for now.
 		text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
 
-		if text == "" {
+		if text == "" || text == strings.TrimSpace(prefix) || text == strings.TrimSpace(suffix) {
 			continue
 		}
 
@@ -362,7 +362,7 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 	addPrefix := false
 	for _, text := range lines {
 
-		// Remove messgae thread context prefix for formatting and remember to add it back
+		// Remove message thread context prefix for formatting and remember to add it back
 		if !addPrefix && u.v.GetBool(u.br.Protocol()+".prefixcontext") && !u.v.GetBool(u.br.Protocol()+".showcontextmulti") && strings.HasPrefix(text, prefix) {
 			text = strings.TrimPrefix(text, prefix)
 			addPrefix = true
@@ -371,7 +371,7 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 		// TODO: Ideally, we want to read the whole code block and syntax highlight on that, but let's go with per-line for now.
 		text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
 
-		if text == "" {
+		if text == "" || text == strings.TrimSpace(prefix) || text == strings.TrimSpace(suffix) {
 			continue
 		}
 
