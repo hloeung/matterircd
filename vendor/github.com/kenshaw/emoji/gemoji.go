@@ -13,7 +13,7 @@ func Gemoji() []Emoji {
 		{"\U0001f601", "beaming face with smiling eyes", "Smileys & Emotion", []string{"grin"}, []string{}, "6.0", "6.0", false},
 		{"\U0001f606", "grinning squinting face", "Smileys & Emotion", []string{"laughing", "satisfied"}, []string{"happy", "haha"}, "6.0", "6.0", false},
 		{"\U0001f605", "grinning face with sweat", "Smileys & Emotion", []string{"sweat_smile"}, []string{"hot"}, "6.0", "6.0", false},
-		{"\U0001f923", "rolling on the floor laughing", "Smileys & Emotion", []string{"rofl"}, []string{"lol", "laughing"}, "9.0", "10.2", false},
+		{"\U0001f923", "rolling on the floor laughing", "Smileys & Emotion", []string{"rofl", "rolling_on_the_floor_laughing"}, []string{"lol", "laughing"}, "9.0", "10.2", false},
 		{"\U0001f602", "face with tears of joy", "Smileys & Emotion", []string{"joy"}, []string{"tears"}, "6.0", "6.0", false},
 		{"\U0001f642", "slightly smiling face", "Smileys & Emotion", []string{"slightly_smiling_face"}, []string{}, "7.0", "9.1", false},
 		{"\U0001f643", "upside-down face", "Smileys & Emotion", []string{"upside_down_face"}, []string{}, "8.0", "9.1", false},
