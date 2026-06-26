@@ -1667,6 +1667,8 @@ func parseMatterpollToMsg(attachments []*model.SlackAttachment, unicode bool) st
 	return strings.TrimRight(msg, "\n")
 }
 
+const blockQuoteCharDefault = ">"
+
 //nolint:funlen,gocognit,gocyclo
 func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachment, useFallback bool) string {
 	useUnicode := m.v.GetBool("mattermost.unicode")
@@ -1774,8 +1776,8 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 			val1Str := strings.TrimPrefix(fmt.Sprintf("%v", field.Value), "\n")
 
 			// Block quotes
-			if !disableIrcEmphasis && strings.HasPrefix(val1Str, ">") {
-				val1Str = strings.Replace(val1Str, ">", prefixChar, 1)
+			if !disableIrcEmphasis && strings.HasPrefix(val1Str, blockQuoteCharDefault) {
+				val1Str = strings.Replace(val1Str, blockQuoteCharDefault, prefixChar, 1)
 			}
 
 			// Check if this field and the next field are both flagged as "short"

@@ -127,6 +127,14 @@ func (u *User) handleChannelTopicEvent(event *bridge.ChannelTopicEvent) {
 	logger.Errorf("topic change failure: userID %s not found", event.UserID)
 }
 
+const (
+	blockQuoteCharDefault     = ">"
+	blockQuoteCharNonUnicode  = "|"
+	blockQuoteCharUnicode     = "🮇"
+	codeBlockPrefixNonUnicode = "|"
+	codeBlockPrefixUnicode    = "🮇"
+)
+
 func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 	if u.v.GetBool(u.br.Protocol() + ".showmentions") {
 		for _, m := range u.MentionKeys {
@@ -147,9 +155,11 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 	var showContext bool
 	var maxlen int
 
-	prefixChar := "|"
-	if u.v.GetBool(u.br.Protocol() + ".unicode") {
-		prefixChar = "🮇"
+	blockQuoteChar := blockQuoteCharNonUnicode
+	if !u.v.GetBool(u.br.Protocol() + ".disablemarkdownblockquote") {
+		blockQuoteChar = u.v.GetString(u.br.Protocol() + ".markdownblockquotechar")
+	} else if u.v.GetBool(u.br.Protocol() + ".unicode") {
+		blockQuoteChar = blockQuoteCharUnicode
 	}
 
 	text := event.Text
@@ -164,8 +174,8 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 			prefixUser = event.Receiver.User
 		}
 		// Block quotes
-		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && strings.HasPrefix(text, ">") {
-			text = strings.Replace(text, ">", prefixChar, 1)
+		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && strings.HasPrefix(text, blockQuoteCharDefault) {
+			text = strings.Replace(text, blockQuoteCharDefault, blockQuoteChar, 1)
 		}
 		text, prefix, suffix, showContext, maxlen = u.handleMessageThreadContext(prefixUser, event.MessageID, event.ParentID, event.Event, text)
 	}
@@ -174,7 +184,12 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 	lexer := ""
 	codeBlockBackTick := false
 	codeBlockTilde := false
-	codeBlockPrefix := u.v.GetString(u.br.Protocol() + ".codeblockprefix")
+	codeBlockPrefix := codeBlockPrefixNonUnicode
+	if !u.v.GetBool(u.br.Protocol() + ".disablecodeblockprefix") {
+		codeBlockPrefix = u.v.GetString(u.br.Protocol() + ".codeblockprefix")
+	} else if u.v.GetBool(u.br.Protocol() + ".unicode") {
+		codeBlockPrefix = codeBlockPrefixUnicode
+	}
 	text = wordwrap.String(text, maxlen)
 	lines := strings.Split(text, "\n")
 	addPrefix := false
@@ -194,7 +209,7 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 		}
 
 		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && !codeBlockBackTick && !codeBlockTilde {
-			text = utils.Markdown2irc(text, prefixChar)
+			text = utils.Markdown2irc(text, blockQuoteChar)
 		}
 
 		if !u.v.GetBool(u.br.Protocol()+".disableemoji") && !codeBlockBackTick && !codeBlockTilde {
@@ -332,9 +347,11 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 		}
 	}
 
-	prefixChar := "|"
-	if u.v.GetBool(u.br.Protocol() + ".unicode") {
-		prefixChar = "🮇"
+	blockQuoteChar := blockQuoteCharNonUnicode
+	if !u.v.GetBool(u.br.Protocol() + ".disablemarkdownblockquote") {
+		blockQuoteChar = u.v.GetString(u.br.Protocol() + ".markdownblockquotechar")
+	} else if u.v.GetBool(u.br.Protocol() + ".unicode") {
+		blockQuoteChar = blockQuoteCharUnicode
 	}
 
 	text := event.Text
@@ -344,8 +361,8 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 	maxlen := 440
 	if u.Nick != systemUser {
 		// Block quotes
-		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && strings.HasPrefix(text, ">") {
-			text = strings.Replace(text, ">", prefixChar, 1)
+		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && strings.HasPrefix(text, blockQuoteCharDefault) {
+			text = strings.Replace(text, blockQuoteCharDefault, blockQuoteChar, 1)
 		}
 		text, prefix, suffix, showContext, maxlen = u.handleMessageThreadContext(event.ChannelID, event.MessageID, event.ParentID, event.Event, text)
 	} else {
@@ -356,7 +373,12 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 	lexer := ""
 	codeBlockBackTick := false
 	codeBlockTilde := false
-	codeBlockPrefix := u.v.GetString(u.br.Protocol() + ".codeblockprefix")
+	codeBlockPrefix := codeBlockPrefixNonUnicode
+	if !u.v.GetBool(u.br.Protocol() + ".disablecodeblockprefix") {
+		codeBlockPrefix = u.v.GetString(u.br.Protocol() + ".codeblockprefix")
+	} else if u.v.GetBool(u.br.Protocol() + ".unicode") {
+		codeBlockPrefix = codeBlockPrefixUnicode
+	}
 	text = wordwrap.String(text, maxlen)
 	lines := strings.Split(text, "\n")
 	addPrefix := false
@@ -376,7 +398,7 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 		}
 
 		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && !codeBlockBackTick && !codeBlockTilde {
-			text = utils.Markdown2irc(text, prefixChar)
+			text = utils.Markdown2irc(text, blockQuoteChar)
 		}
 
 		if !u.v.GetBool(u.br.Protocol()+".disableemoji") && !codeBlockBackTick && !codeBlockTilde {
