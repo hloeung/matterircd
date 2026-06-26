@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -87,7 +88,7 @@ func New(login string, pass string, team string, server string, mfatoken string)
 	rootLogger := logrus.New()
 	rootLogger.SetFormatter(&prefixed.TextFormatter{
 		PrefixPadding: 13,
-		DisableColors: true,
+		DisableColors: false,
 		FullTimestamp: true,
 	})
 
@@ -230,15 +231,30 @@ func (m *Client) initClient(b *backoff.Backoff) error {
 	}
 	// login to mattermost
 	m.Client = model.NewAPIv4Client(uriScheme + m.Credentials.Server)
+
+	if m.Timeout == 0 {
+		m.Timeout = 10
+	}
 	m.Client.HTTPClient.Transport = &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: m.SkipTLSVerify, //nolint:gosec
 		},
 		Proxy: http.ProxyFromEnvironment,
-	}
 
-	if m.Timeout == 0 {
-		m.Timeout = 10
+		// https://github.com/matterbridge/matterclient/pull/9
+		DialContext: (&net.Dialer{
+			Timeout:   time.Second * time.Duration(m.Timeout),
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   time.Second * time.Duration(m.Timeout),
+		ExpectContinueTimeout: 1 * time.Second,
+
+		// https://github.com/matterbridge/matterclient/pull/9
+		// Additional tuning
+		MaxIdleConnsPerHost: 10,
 	}
 
 	m.Client.HTTPClient.Timeout = time.Second * time.Duration(m.Timeout)
