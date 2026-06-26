@@ -140,6 +140,9 @@ HideReactions = false
 # Disable converting emoji strings/aliases to their unicode equivalent. Best with fonts-noto-color-emoji installed.
 #DisableEmoji = true
 
+#DisableMarkdownBlockQuote = true
+#MarkdownBlockQuoteChar = "|"
+
 #Only join direct/group messages when someone talks. This stops from cluttering your 
 #irc client with lots of windows.
 #If set to true dm/group messages will be joined on startup and not only on talk in the channel.
@@ -179,6 +182,7 @@ ShowMentions = false
 #   https://github.com/alecthomas/chroma/tree/master/styles
 # These are different colour schemes/styles. E.g. pygments, emacs, autumn, etc.
 SyntaxHighlighting = "terminal256:pygments"
+#DisableCodeBlockPrefix = true
 CodeBlockPrefix = "\\x1b[1;38;2;0;82;204m|\\x1b[0m "
 
 # Path to file to store last viewed information. This is useful for replying only
