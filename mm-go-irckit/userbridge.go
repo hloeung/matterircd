@@ -689,6 +689,7 @@ func (u *User) addUserToChannelWorker(channels <-chan *bridge.ChannelInfo, throt
 		}
 
 		args := []string{brchannel.Name, brchannel.TeamID}
+
 		replay(u, u, args, "")
 
 		if !u.v.GetBool(u.br.Protocol() + ".disableautoview") {

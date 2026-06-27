@@ -215,7 +215,7 @@ func login(u *User, toUser *User, args []string, service string) {
 //nolint:funlen,gocognit,gocyclo,cyclop
 func replay(u *User, toUser *User, args []string, service string) {
 	if len(args) == 0 || len(args) > 2 {
-		u.MsgUser(toUser, "need REPLAY (#<channel>|<user>)")
+		u.MsgUser(toUser, "need REPLAY (#<channel>)")
 		u.MsgUser(toUser, "e.g. REPLAY #bugs")
 		return
 	}
@@ -228,7 +228,7 @@ func replay(u *User, toUser *User, args []string, service string) {
 	channelID := u.br.GetChannelID(channelName, channelTeamID)
 	brchannel, err := u.br.GetChannel(channelID)
 	if err != nil {
-		logger.Errorf("%s not found", channelName)
+		u.MsgUser(toUser, channelName+"not found")
 		return
 	}
 
@@ -238,7 +238,7 @@ func replay(u *User, toUser *User, args []string, service string) {
 		return
 	}
 
-	// exclude direct messages
+	// create a spoof function (DM channels are replayed as PMs via createSpoof's "__" special-case)
 	spoof := u.createSpoof(brchannel)
 
 	logSince := "server"
@@ -247,7 +247,7 @@ func replay(u *User, toUser *User, args []string, service string) {
 		channame = fmt.Sprintf("#%s", brchannel.Name)
 	}
 
-	// We used to stored last viewed at if present.
+	// We used to store last viewed at if present.
 	var lastViewedAt int64
 	key := brchannel.ID
 	err = u.lastViewedAtDB.View(func(tx *bolt.Tx) error {
