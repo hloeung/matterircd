@@ -517,45 +517,33 @@ func (m *Mattermost) GetChannelName(channelID string) string {
 
 func (m *Mattermost) GetChannelUsers(channelID string) ([]*bridge.UserInfo, error) {
 	var (
-		mmusers, mmusersPaged []*model.User
-		users                 []*bridge.UserInfo
-		err                   error
-		resp                  *model.Response
+		mmusersPaged []*model.User
+		users        []*bridge.UserInfo
+		err          error
+		resp         *model.Response
 	)
 
 	idx := 0
-	max := 200
+	const batchSize = 200
 
 	for {
-		mmusersPaged, resp, err = m.mc.Client.GetUsersInChannel(channelID, idx, max, "")
-		if err == nil {
+		mmusersPaged, resp, err = m.mc.Client.GetUsersInChannel(channelID, idx, batchSize, "")
+		if err != nil {
+			if rlErr := m.mc.HandleRatelimit("GetUsersInChannel", resp); rlErr != nil {
+				return nil, rlErr
+			}
+			continue
+		}
+
+		for _, mmuser := range mmusersPaged {
+			users = append(users, m.createUser(mmuser))
+		}
+
+		if len(mmusersPaged) < batchSize {
 			break
 		}
 
-		if err = m.mc.HandleRatelimit("GetUsersInChannel", resp); err != nil {
-			return nil, err
-		}
-	}
-
-	for len(mmusersPaged) > 0 {
-		for {
-			mmusersPaged, resp, err = m.mc.Client.GetUsersInChannel(channelID, idx, max, "")
-			if err == nil {
-				idx++
-				time.Sleep(time.Millisecond * 200)
-				mmusers = append(mmusers, mmusersPaged...)
-
-				break
-			}
-
-			if err := m.mc.HandleRatelimit("GetUsersInChannel", resp); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	for _, mmuser := range mmusers {
-		users = append(users, m.createUser(mmuser))
+		idx++
 	}
 
 	return users, nil
