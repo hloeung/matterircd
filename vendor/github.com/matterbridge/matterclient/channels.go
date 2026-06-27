@@ -1,6 +1,7 @@
 package matterclient
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/mattermost/mattermost-server/v6/model"
@@ -260,6 +261,11 @@ func (m *Client) UpdateChannelsTeam(teamID string) error {
 }
 
 func (m *Client) UpdateChannels() error {
+	if m.Team == nil {
+		m.logger.Errorf("cannot update channels: primary team is nil")
+		return errors.New("cannot update channels: primary team is nil")
+	}
+
 	if err := m.UpdateChannelsTeam(m.Team.ID); err != nil {
 		return err
 	}
