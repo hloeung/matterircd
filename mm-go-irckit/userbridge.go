@@ -174,7 +174,7 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 			prefixUser = event.Receiver.User
 		}
 		// Block quotes
-		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && strings.HasPrefix(text, blockQuoteCharDefault) {
+		if !u.v.GetBool(u.br.Protocol()+".disablemarkdown") && strings.HasPrefix(text, blockQuoteCharDefault) {
 			text = strings.Replace(text, blockQuoteCharDefault, blockQuoteChar, 1)
 		}
 		text, prefix, suffix, showContext, maxlen = u.handleMessageThreadContext(prefixUser, event.MessageID, event.ParentID, event.Event, text)
@@ -208,7 +208,7 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 			continue
 		}
 
-		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && !codeBlockBackTick && !codeBlockTilde {
+		if !u.v.GetBool(u.br.Protocol()+".disablemarkdown") && !codeBlockBackTick && !codeBlockTilde {
 			text = utils.Markdown2irc(text, blockQuoteChar)
 		}
 
@@ -361,7 +361,7 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 	maxlen := 440
 	if u.Nick != systemUser {
 		// Block quotes
-		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && strings.HasPrefix(text, blockQuoteCharDefault) {
+		if !u.v.GetBool(u.br.Protocol()+".disablemarkdown") && strings.HasPrefix(text, blockQuoteCharDefault) {
 			text = strings.Replace(text, blockQuoteCharDefault, blockQuoteChar, 1)
 		}
 		text, prefix, suffix, showContext, maxlen = u.handleMessageThreadContext(event.ChannelID, event.MessageID, event.ParentID, event.Event, text)
@@ -397,7 +397,7 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 			continue
 		}
 
-		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && !codeBlockBackTick && !codeBlockTilde {
+		if !u.v.GetBool(u.br.Protocol()+".disablemarkdown") && !codeBlockBackTick && !codeBlockTilde {
 			text = utils.Markdown2irc(text, blockQuoteChar)
 		}
 
