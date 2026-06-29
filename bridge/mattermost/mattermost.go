@@ -792,7 +792,7 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 	}
 
 	lastSentMsg = maybeShorten(lastSentMsg, 90, "@", useUnicode)
-	m.msgLastSentCache.Add(msgID, fmt.Sprintf("%s: %s", channel, lastSentMsg+postfix))
+	m.msgLastSentCache.Add(msgID, channel+": "+lastSentMsg+postfix)
 
 	logger.Debugf("message is sent from this matterircd instance, not relaying %#v", data.Message)
 	return true
@@ -807,34 +807,42 @@ func maybeShorten(msg string, newLen int, uncounted string, unicode bool) string
 	if newLen == 0 || len(msg) < newLen {
 		return msg
 	}
+
 	ellipsis := "..."
 	if unicode {
 		ellipsis = "…"
 	}
-	newMsg := ""
-	for _, word := range strings.Split(strings.ReplaceAll(msg, "\n", " "), " ") {
-		if newMsg == "" {
-			newMsg = word
-			continue
-		}
-		if len(newMsg) < newLen {
-			skipped := false
-			if uncounted != "" && strings.HasPrefix(word, uncounted) {
-				newLen += len(word) + 1
-				skipped = true
+
+	var b strings.Builder
+	b.Grow(min(len(msg), newLen+8))
+
+	fields := strings.FieldsFunc(msg, func(r rune) bool {
+		return r == ' ' || r == '\n'
+	})
+
+	for _, word := range fields {
+		if b.Len() > 0 {
+			if b.Len() >= newLen {
+				break
 			}
+			b.WriteByte(' ')
+		}
+
+		if uncounted != "" && strings.HasPrefix(word, uncounted) {
+			newLen += len(word) + 1
+		} else if len(word) > newLen {
 			// Truncate very long words, but only if they were not skipped, on the
 			// assumption that such words are important enough to be preserved whole.
-			if !skipped && len(word) > newLen {
-				word = fmt.Sprintf("%s[%s]", word[0:(newLen*2/3)], ellipsis)
-			}
-			newMsg = fmt.Sprintf("%s %s", newMsg, word)
-			continue
+			word = word[:newLen*2/3] + "[" + ellipsis + "]"
 		}
-		break
+
+		b.WriteString(word)
 	}
 
-	return fmt.Sprintf("%s %s", newMsg, ellipsis)
+	b.WriteByte(' ')
+	b.WriteString(ellipsis)
+
+	return b.String()
 }
 
 func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncounted string, unicode bool) (string, error) {
@@ -886,7 +894,7 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 
 		parentUser := m.GetUser(parentPost.UserId)
 		parentMessage := maybeShorten(msg, newLen, uncounted, unicode)
-		replyMessage = fmt.Sprintf(" (re @%s: %s)", parentUser.Nick, parentMessage)
+		replyMessage = " (re @" + parentUser.Nick + ": " + parentMessage + ")"
 		logger.Debugf("Created reply for parent post %s:%s", parentID, replyMessage)
 
 		m.msgParentCache.Add(parentID, replyMessage)
@@ -894,7 +902,10 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 		logger.Debugf("Found saved reply for parent post %s, using:%s", parentID, replyMessage)
 	}
 
-	return strings.TrimRight(msg, "\n") + replyMessage, nil
+	if strings.HasSuffix(msg, "\n") { //nolint:gosimple
+		msg = msg[:len(msg)-1]
+	}
+	return msg + replyMessage, nil
 }
 
 var (
@@ -928,8 +939,9 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 		message, err := m.addParentMsg(data.RootId, postfix, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", useUnicode)
 		if err != nil {
 			logger.Errorf("Unable to get parent post for %#v", data) //nolint:govet
+		} else {
+			postfix = message
 		}
-		postfix += message
 	}
 
 	// create new "ghost" user
@@ -1029,14 +1041,12 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 		}
 	}
 
-	// msgs := strings.Split(data.Message, "\n")
-	msgs := []string{data.Message}
+	msg := data.Message
+	eventType := rmsg.EventType()
 
 	// add an edited/deleted string when messages are edited/deleted
-	if len(msgs) > 0 && (rmsg.EventType() == model.WebsocketEventPostEdited ||
-		rmsg.EventType() == model.WebsocketEventPostDeleted) {
-
-		if rmsg.EventType() == model.WebsocketEventPostDeleted {
+	if eventType == model.WebsocketEventPostEdited || eventType == model.WebsocketEventPostDeleted {
+		if eventType == model.WebsocketEventPostDeleted {
 			postfix += " \x1d(deleted)\x1d"
 		} else {
 			postfix += " \x1d(edited)\x1d"
@@ -1053,109 +1063,92 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 		m.msgParentCache.Remove(data.Id)
 	}
 
-	for _, msg := range msgs {
-		switch {
-		case channelType == "D":
-			event := &bridge.Event{
-				Type: "direct_message",
-			}
+	attachments := data.Attachments()
 
-			if data.Type == "me" {
-				msg = strings.TrimLeft(msg, "*")
-				msg = strings.TrimRight(msg, "*")
-				msg = "\x01ACTION " + msg + " \x01"
-			}
-
-			d := &bridge.DirectMessageEvent{
-				Text:      strings.TrimRight(msg, "\n") + postfix,
-				ChannelID: data.ChannelId,
-				MessageID: data.Id,
-				Event:     rmsg.EventType(),
-				ParentID:  data.RootId,
-			}
-
-			if ghost.Me {
-				d.Sender = ghost
-				d.Receiver = m.getDMUser(dmchannel)
-			} else {
-				d.Sender = m.getDMUser(dmchannel)
-				d.Receiver = ghost
-			}
-
-			if d.Sender == nil || d.Receiver == nil {
-				logger.Errorf("dm: couldn't resolve sender or receiver: %#v", rmsg)
-				return
-			}
-
-			event.Data = d
-
-			m.eventChan <- event
-
-			if data.Type == "me" {
-				break
-			}
-		default:
-			if data.Type == "me" {
-				msg = strings.TrimLeft(msg, "*")
-				msg = strings.TrimRight(msg, "*")
-				msg = "\x01ACTION " + msg + " \x01"
-			} else if data.Type == "slack_attachment" {
-				useFallback := msg == ""
-				// https://docs.slack.dev/tools/node-slack-sdk/reference/web-api/interfaces/MessageAttachment/
-				attachmentMsg := m.parseMessageAttachments(data.Attachments(), useFallback)
-				if msg != "" && attachmentMsg != "" {
-					msg += "\n"
-				}
-				msg += attachmentMsg
-			} else if data.Type == "custom_matterpoll" {
-				pollMsg := parseMatterpollToMsg(data.Attachments(), useUnicode)
-				msg += pollMsg
-			} else if attachments := data.Attachments(); len(attachments) > 0 {
-				useFallback := msg == ""
-				// https://developers.mattermost.com/integrate/reference/message-attachments/
-				attachmentMsg := m.parseMessageAttachments(attachments, useFallback)
-				if msg != "" && attachmentMsg != "" {
-					msg += "\n"
-				}
-				msg += attachmentMsg
-			}
-
-			event := &bridge.Event{
-				Type: "channel_message",
-				Data: &bridge.ChannelMessageEvent{
-					Text:        strings.TrimRight(msg, "\n") + postfix,
-					ChannelID:   data.ChannelId,
-					Sender:      ghost,
-					ChannelType: channelType,
-					MessageID:   data.Id,
-					Event:       rmsg.EventType(),
-					ParentID:    data.RootId,
-				},
-			}
-
-			if !m.v.GetBool("mattermost.disabledefaultmentions") && channelMentionsRegExp.MatchString(data.Message) {
-				messageType := "notice"
-				event = &bridge.Event{
-					Type: "channel_message",
-					Data: &bridge.ChannelMessageEvent{
-						Text:        strings.TrimRight(msg, "\n") + postfix,
-						ChannelID:   data.ChannelId,
-						Sender:      ghost,
-						MessageType: messageType,
-						ChannelType: channelType,
-						MessageID:   data.Id,
-						Event:       rmsg.EventType(),
-						ParentID:    data.RootId,
-					},
-				}
-			}
-
-			m.eventChan <- event
-
-			if data.Type == "me" {
-				break
-			}
+	switch {
+	case data.Type == "me":
+		msg = "\x01ACTION " + strings.Trim(msg, "*") + " \x01"
+	case data.Type == "slack_attachment":
+		useFallback := msg == ""
+		// https://docs.slack.dev/tools/node-slack-sdk/reference/web-api/interfaces/MessageAttachment/
+		attachmentMsg := m.parseMessageAttachments(data.Attachments(), useFallback)
+		if msg == "" {
+			msg = attachmentMsg
+		} else if attachmentMsg != "" {
+			msg = msg + "\n" + attachmentMsg
 		}
+	case data.Type == "custom_matterpoll":
+		pollMsg := parseMatterpollToMsg(data.Attachments(), useUnicode)
+		msg += pollMsg
+	case len(attachments) > 0:
+		useFallback := msg == ""
+		// https://developers.mattermost.com/integrate/reference/message-attachments/
+		attachmentMsg := m.parseMessageAttachments(attachments, useFallback)
+		if msg == "" {
+			msg = attachmentMsg
+		} else if attachmentMsg != "" {
+			msg = msg + "\n" + attachmentMsg
+		}
+	}
+
+	if strings.HasSuffix(msg, "\n") { //nolint:gosimple
+		msg = msg[:len(msg)-1]
+	}
+	if postfix != "" {
+		msg += postfix
+	}
+
+	switch {
+	case channelType == "D":
+		event := &bridge.Event{
+			Type: "direct_message",
+		}
+
+		d := &bridge.DirectMessageEvent{
+			Text:      msg,
+			ChannelID: data.ChannelId,
+			MessageID: data.Id,
+			Event:     eventType,
+			ParentID:  data.RootId,
+		}
+
+		if ghost.Me {
+			d.Sender = ghost
+			d.Receiver = m.getDMUser(dmchannel)
+		} else {
+			d.Sender = m.getDMUser(dmchannel)
+			d.Receiver = ghost
+		}
+
+		if d.Sender == nil || d.Receiver == nil {
+			logger.Errorf("dm: couldn't resolve sender or receiver: %#v", rmsg)
+			return
+		}
+
+		event.Data = d
+
+		m.eventChan <- event
+	default:
+		messageType := ""
+		if !m.v.GetBool("mattermost.disabledefaultmentions") && channelMentionsRegExp.MatchString(data.Message) {
+			messageType = "notice"
+		}
+
+		event := &bridge.Event{
+			Type: "channel_message",
+			Data: &bridge.ChannelMessageEvent{
+				Text:        msg,
+				ChannelID:   data.ChannelId,
+				Sender:      ghost,
+				MessageType: messageType,
+				ChannelType: channelType,
+				MessageID:   data.Id,
+				Event:       eventType,
+				ParentID:    data.RootId,
+			},
+		}
+
+		m.eventChan <- event
 	}
 
 	if len(data.FileIds) > 0 {
@@ -1667,7 +1660,6 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 	disableMarkdown := m.v.GetBool("mattermost.disablemarkdown")
 	disableEmoji := m.v.GetBool("mattermost.disableemoji")
 
-	msg := ""
 	prefixChar := messageAttachmentCharNonUnicode
 	spaceChar := messageAttachmentSpaceNonUnicode
 	blockquoteChar := blockquoteCharNonUnicode
@@ -1676,11 +1668,15 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 		spaceChar = messageAttachmentSpaceUnicode
 		blockquoteChar = blockquoteCharUnicode
 		// Downgrade heavy vertical to light as we're using heavy already
-		codeBlockPrefix = strings.Replace(codeBlockPrefix, "┃", "│", 1)
-		codeBlockPrefix = strings.Replace(codeBlockPrefix, "🮇", "▕", 1)
-		codeBlockPrefix = strings.Replace(codeBlockPrefix, "▎", "▏", 1)
+		if strings.ContainsAny(codeBlockPrefix, "┃🮇▎") {
+			codeBlockPrefix = strings.Replace(codeBlockPrefix, "┃", "│", 1)
+			codeBlockPrefix = strings.Replace(codeBlockPrefix, "🮇", "▕", 1)
+			codeBlockPrefix = strings.Replace(codeBlockPrefix, "▎", "▏", 1)
+		}
 	}
-	fallbackText := ""
+
+	var b strings.Builder
+
 	for _, attachment := range attachments {
 		prefix := "\033[1m" + prefixChar + "\033[0m" + spaceChar
 		switch {
@@ -1697,9 +1693,14 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 			gg, _ := strconv.ParseInt(hex[2:4], 16, 0)
 			bb, _ := strconv.ParseInt(hex[4:6], 16, 0)
 			// https://modern.ircdocs.horse/formatting.html#hex-color
-			prefix = fmt.Sprintf("\033[1;38;2;%d;%d;%dm%s\033[0m%s", int(rr), int(gg), int(bb), prefixChar, spaceChar)
+			prefix = "\033[1;38;2;" +
+				strconv.Itoa(int(rr)) + ";" +
+				strconv.Itoa(int(gg)) + ";" +
+				strconv.Itoa(int(bb)) + "m" +
+				prefixChar + "\033[0m" + spaceChar
 		}
 
+		var fallbackText string
 		if useFallback {
 			fallbackText, _, _ = strings.Cut(attachment.Fallback, "\n")
 
@@ -1720,22 +1721,33 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 				fallbackText = emoji.ReplaceAliases(fallbackText)
 			}
 
-			msg += fallbackText + "\n"
+			b.WriteString(fallbackText)
+			b.WriteByte('\n')
 		}
 
 		if attachment.AuthorName != "" {
-			msg += prefix + attachment.AuthorName
+			b.WriteString(prefix)
+			b.WriteString(attachment.AuthorName)
 			if attachment.AuthorLink != "" {
-				msg += spaceChar + "(" + attachment.AuthorLink + ")"
+				b.WriteString(spaceChar)
+				b.WriteString("(")
+				b.WriteString(attachment.AuthorLink)
+				b.WriteString(")")
 			}
-			msg += "\n"
+			b.WriteByte('\n')
 		}
 		if attachment.Title != "" {
-			msg += prefix + "\x02" + attachment.Title + "\x02"
+			b.WriteString(prefix)
+			b.WriteByte('\x02')
+			b.WriteString(attachment.Title)
+			b.WriteByte('\x02')
 			if attachment.TitleLink != "" {
-				msg += " (\x1d" + attachment.TitleLink + "\x1d)"
+				b.WriteString(" (\x1d")
+				b.WriteString(attachment.TitleLink)
+				b.WriteByte('\x1d')
+				b.WriteByte(')')
 			}
-			msg += "\n"
+			b.WriteByte('\n')
 		}
 		if attachment.Text != "" {
 			lexer := ""
@@ -1753,11 +1765,15 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 					text = emoji.ReplaceAliases(text)
 				}
 
-				msg += prefix + text + "\n"
+				b.WriteString(prefix)
+				b.WriteString(text)
+				b.WriteByte('\n')
 			}
 		}
 		if attachment.ImageURL != "" {
-			msg += prefix + attachment.ImageURL + "\n"
+			b.WriteString(prefix)
+			b.WriteString(attachment.ImageURL)
+			b.WriteByte('\n')
 		}
 
 		for i := 0; i < len(attachment.Fields); {
@@ -1776,7 +1792,11 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 				// Same, avoid messing with our table format
 				val2Str := strings.TrimPrefix(fmt.Sprintf("%v", nextField.Value), "\n")
 
-				msg += prefix + fmt.Sprintf("\x02%-30s %s", field.Title, nextField.Title) + "\x02\n"
+				b.WriteString(prefix)
+				b.WriteByte('\x02')
+				b.WriteString(fmt.Sprintf("%-30s %s", field.Title, nextField.Title))
+				b.WriteByte('\x02')
+				b.WriteByte('\n')
 
 				val1Lines := strings.Split(val1Str, "\n")
 				val2Lines := strings.Split(val2Str, "\n")
@@ -1794,7 +1814,9 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 					if j < len(val2Lines) {
 						v2 = val2Lines[j]
 					}
-					msg += prefix + fmt.Sprintf("%-30s %s", v1, v2) + "\n"
+					b.WriteString(prefix)
+					b.WriteString(fmt.Sprintf("%-30s %s", v1, v2))
+					b.WriteByte('\n')
 				}
 
 				i += 2
@@ -1802,7 +1824,11 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 				// Fallback to original behavior for long fields or unpaired short fields
 
 				if field.Title != "" {
-					msg += prefix + "\x02" + field.Title + "\x02\n"
+					b.WriteString(prefix)
+					b.WriteByte('\x02')
+					b.WriteString(field.Title)
+					b.WriteByte('\x02')
+					b.WriteByte('\n')
 				}
 
 				lexer := ""
@@ -1826,14 +1852,20 @@ func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachmen
 						continue
 					}
 
-					msg += prefix + text + "\n"
+					b.WriteString(prefix)
+					b.WriteString(text)
+					b.WriteByte('\n')
 				}
 				i++
 			}
 		}
 	}
 
-	return strings.TrimRight(msg, "\n")
+	msg := b.String()
+	if strings.HasSuffix(msg, "\n") { //nolint:gosimple
+		msg = msg[:len(msg)-1]
+	}
+	return msg
 }
 
 func (m *Mattermost) GetLastSentMsgs() []string {
@@ -1842,7 +1874,7 @@ func (m *Mattermost) GetLastSentMsgs() []string {
 	for _, k := range m.msgLastSentCache.Keys() {
 		if v, ok := m.msgLastSentCache.Get(k); ok {
 			msg, _ := v.(string)
-			data = append(data, fmt.Sprintf("[@@%s] %s", k, msg))
+			data = append(data, "[@@"+fmt.Sprint(k)+"] "+msg)
 		}
 	}
 
