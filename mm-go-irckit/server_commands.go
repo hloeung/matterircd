@@ -449,6 +449,7 @@ func CmdPrivMsg(s Server, u *User, msg *irc.Message) error {
 
 			msgID, err2 := u.br.MsgUser(toUser.User, msg.Trailing)
 			if err2 != nil {
+				u.MsgSpoofUser(u, u.br.Protocol(), "msg: "+msg.Trailing+" could not be sent "+err2.Error())
 				return err2
 			}
 			u.msgLastMutex.Lock()

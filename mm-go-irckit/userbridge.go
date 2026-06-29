@@ -1,14 +1,11 @@
 package irckit
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math/rand"
 	"net"
 	"net/http"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,7 +16,7 @@ import (
 	"github.com/42wim/matterircd/bridge/mastodon"
 	"github.com/42wim/matterircd/bridge/mattermost"
 	"github.com/42wim/matterircd/bridge/slack"
-	"github.com/alecthomas/chroma/v2/quick"
+	"github.com/42wim/matterircd/utils"
 	"github.com/davecgh/go-spew/spew"
 	"github.com/kenshaw/emoji"
 	"github.com/mattermost/mattermost-server/v6/model"
@@ -130,6 +127,14 @@ func (u *User) handleChannelTopicEvent(event *bridge.ChannelTopicEvent) {
 	logger.Errorf("topic change failure: userID %s not found", event.UserID)
 }
 
+const (
+	blockQuoteCharDefault     = ">"
+	blockQuoteCharNonUnicode  = "|"
+	blockQuoteCharUnicode     = "🮇"
+	codeBlockPrefixNonUnicode = "|"
+	codeBlockPrefixUnicode    = "🮇"
+)
+
 func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 	if u.v.GetBool(u.br.Protocol() + ".showmentions") {
 		for _, m := range u.MentionKeys {
@@ -147,14 +152,20 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 		}
 	}
 
-	var text string
 	var showContext bool
 	var maxlen int
 
+	blockQuoteChar := blockQuoteCharNonUnicode
+	if !u.v.GetBool(u.br.Protocol() + ".disablemarkdownblockquote") {
+		blockQuoteChar = u.v.GetString(u.br.Protocol() + ".markdownblockquotechar")
+	} else if u.v.GetBool(u.br.Protocol() + ".unicode") {
+		blockQuoteChar = blockQuoteCharUnicode
+	}
+
+	text := event.Text
 	prefix := ""
 	suffix := ""
 	if event.Event == "dm_topic" {
-		text = event.Text
 		showContext = false
 		maxlen = 0
 	} else {
@@ -162,33 +173,64 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 		if event.Sender.Me {
 			prefixUser = event.Receiver.User
 		}
-		text, prefix, suffix, showContext, maxlen = u.handleMessageThreadContext(prefixUser, event.MessageID, event.ParentID, event.Event, event.Text)
+		// Block quotes
+		if !u.v.GetBool(u.br.Protocol()+".disablemarkdown") && strings.HasPrefix(text, blockQuoteCharDefault) {
+			text = blockQuoteChar + text[1:]
+		}
+		text, prefix, suffix, showContext, maxlen = u.handleMessageThreadContext(prefixUser, event.MessageID, event.ParentID, event.Event, text)
 	}
+	trimmedPrefix := strings.TrimSpace(prefix)
+	trimmedSuffix := strings.TrimSpace(suffix)
+
+	disableMarkdown := u.v.GetBool(u.br.Protocol() + ".disablemarkdown")
+	disableEmoji := u.v.GetBool(u.br.Protocol() + ".disableemoji")
+	prefixContext := u.v.GetBool(u.br.Protocol() + ".prefixcontext")
+	showContextMulti := u.v.GetBool(u.br.Protocol() + ".showcontextmulti")
+	syntaxHighlighting := u.v.GetString(u.br.Protocol() + ".syntaxhighlighting")
 
 	lexer := ""
 	codeBlockBackTick := false
 	codeBlockTilde := false
+	codeBlockPrefix := codeBlockPrefixNonUnicode
+	if !u.v.GetBool(u.br.Protocol() + ".disablecodeblockprefix") {
+		codeBlockPrefix = u.v.GetString(u.br.Protocol() + ".codeblockprefix")
+	} else if u.v.GetBool(u.br.Protocol() + ".unicode") {
+		codeBlockPrefix = codeBlockPrefixUnicode
+	}
 	text = wordwrap.String(text, maxlen)
 	lines := strings.Split(text, "\n")
+	addPrefix := false
 	for _, text := range lines {
 
-		// TODO: Ideally, we want to read the whole code block and syntax highlight on that, but let's go with per-line for now.
-		text, codeBlockBackTick, codeBlockTilde, lexer = u.formatCodeBlockText(text, prefix, codeBlockBackTick, codeBlockTilde, lexer)
+		// Remove message thread context prefix for formatting and remember to add it back
+		if !addPrefix && prefixContext && !showContextMulti && strings.HasPrefix(text, prefix) {
+			text = strings.TrimPrefix(text, prefix)
+			addPrefix = true
+		}
 
-		if text == "" {
+		// TODO: Ideally, we want to read the whole code block and syntax highlight on that, but let's go with per-line for now.
+		text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
+
+		if text == "" || text == trimmedPrefix || text == trimmedSuffix {
 			continue
 		}
 
-		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && !codeBlockBackTick && !codeBlockTilde {
-			text = markdown2irc(text)
+		if !disableMarkdown && !codeBlockBackTick && !codeBlockTilde {
+			text = utils.Markdown2irc(text, blockQuoteChar)
 		}
 
-		if !u.v.GetBool(u.br.Protocol()+".disableemoji") && !codeBlockBackTick && !codeBlockTilde {
+		if !disableEmoji && !codeBlockBackTick && !codeBlockTilde {
 			text = emoji.ReplaceAliases(text)
 		}
 
-		if showContext {
-			text = prefix + text + suffix
+		if showContext || addPrefix {
+			var b strings.Builder
+			b.Grow(len(prefix) + len(text) + len(suffix))
+			b.WriteString(prefix)
+			b.WriteString(text)
+			b.WriteString(suffix)
+			text = b.String()
+			addPrefix = false
 		}
 
 		if event.Sender.Me {
@@ -288,7 +330,7 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 		CHANNEL_GROUP                  = "G"
 	*/
 	nick := sanitizeNick(event.Sender.Nick)
-	logger.Debug("in handleChannelMessageEvent")
+	logger.Debugf("in handleChannelMessageEvent from %s", nick)
 	ch := u.getMessageChannel(event.ChannelID, event.Sender)
 	if event.Sender.Me {
 		nick = u.Nick
@@ -317,41 +359,79 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 		}
 	}
 
+	blockQuoteChar := blockQuoteCharNonUnicode
+	if !u.v.GetBool(u.br.Protocol() + ".disablemarkdownblockquote") {
+		blockQuoteChar = u.v.GetString(u.br.Protocol() + ".markdownblockquotechar")
+	} else if u.v.GetBool(u.br.Protocol() + ".unicode") {
+		blockQuoteChar = blockQuoteCharUnicode
+	}
+
 	text := event.Text
 	prefix := ""
 	suffix := ""
 	showContext := false
 	maxlen := 440
 	if u.Nick != systemUser {
-		text, prefix, suffix, showContext, maxlen = u.handleMessageThreadContext(event.ChannelID, event.MessageID, event.ParentID, event.Event, event.Text)
+		// Block quotes
+		if !u.v.GetBool(u.br.Protocol()+".disablemarkdown") && strings.HasPrefix(text, blockQuoteCharDefault) {
+			text = blockQuoteChar + text[1:]
+		}
+		text, prefix, suffix, showContext, maxlen = u.handleMessageThreadContext(event.ChannelID, event.MessageID, event.ParentID, event.Event, text)
 	} else {
-		text = "\x1d" + text + "\x1d"
+		text = "\x1d" + event.Text + "\x1d"
 	}
+	trimmedPrefix := strings.TrimSpace(prefix)
+	trimmedSuffix := strings.TrimSpace(suffix)
+
+	disableMarkdown := u.v.GetBool(u.br.Protocol() + ".disablemarkdown")
+	disableEmoji := u.v.GetBool(u.br.Protocol() + ".disableemoji")
+	prefixContext := u.v.GetBool(u.br.Protocol() + ".prefixcontext")
+	showContextMulti := u.v.GetBool(u.br.Protocol() + ".showcontextmulti")
+	syntaxHighlighting := u.v.GetString(u.br.Protocol() + ".syntaxhighlighting")
 
 	lexer := ""
 	codeBlockBackTick := false
 	codeBlockTilde := false
+	codeBlockPrefix := codeBlockPrefixNonUnicode
+	if !u.v.GetBool(u.br.Protocol() + ".disablecodeblockprefix") {
+		codeBlockPrefix = u.v.GetString(u.br.Protocol() + ".codeblockprefix")
+	} else if u.v.GetBool(u.br.Protocol() + ".unicode") {
+		codeBlockPrefix = codeBlockPrefixUnicode
+	}
 	text = wordwrap.String(text, maxlen)
 	lines := strings.Split(text, "\n")
+	addPrefix := false
 	for _, text := range lines {
 
-		// TODO: Ideally, we want to read the whole code block and syntax highlight on that, but let's go with per-line for now.
-		text, codeBlockBackTick, codeBlockTilde, lexer = u.formatCodeBlockText(text, prefix, codeBlockBackTick, codeBlockTilde, lexer)
+		// Remove message thread context prefix for formatting and remember to add it back
+		if !addPrefix && prefixContext && !showContextMulti && strings.HasPrefix(text, prefix) {
+			text = strings.TrimPrefix(text, prefix)
+			addPrefix = true
+		}
 
-		if text == "" {
+		// TODO: Ideally, we want to read the whole code block and syntax highlight on that, but let's go with per-line for now.
+		text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
+
+		if text == "" || text == trimmedPrefix || text == trimmedSuffix {
 			continue
 		}
 
-		if !u.v.GetBool(u.br.Protocol()+".disableircemphasis") && !codeBlockBackTick && !codeBlockTilde {
-			text = markdown2irc(text)
+		if !disableMarkdown && !codeBlockBackTick && !codeBlockTilde {
+			text = utils.Markdown2irc(text, blockQuoteChar)
 		}
 
-		if !u.v.GetBool(u.br.Protocol()+".disableemoji") && !codeBlockBackTick && !codeBlockTilde {
+		if !disableEmoji && !codeBlockBackTick && !codeBlockTilde {
 			text = emoji.ReplaceAliases(text)
 		}
 
-		if showContext {
-			text = prefix + text + suffix
+		if showContext || addPrefix {
+			var b strings.Builder
+			b.Grow(len(prefix) + len(text) + len(suffix))
+			b.WriteString(prefix)
+			b.WriteString(text)
+			b.WriteString(suffix)
+			text = b.String()
+			addPrefix = false
 		}
 
 		switch event.MessageType {
@@ -457,7 +537,7 @@ func (u *User) handleStatusChangeEvent(event *bridge.StatusChangeEvent) {
 func (u *User) handleReactionEvent(event interface{}) {
 	var (
 		text, channelID, messageID, parentID, channelType, reaction string
-		sender                                                      *bridge.UserInfo
+		receiver, sender                                            *bridge.UserInfo
 	)
 
 	message := ""
@@ -468,6 +548,7 @@ func (u *User) handleReactionEvent(event interface{}) {
 		text = "added reaction: "
 		channelID = e.ChannelID
 		messageID = e.MessageID
+		receiver = e.Receiver
 		sender = e.Sender
 		channelType = e.ChannelType
 		reaction = e.Reaction
@@ -477,6 +558,7 @@ func (u *User) handleReactionEvent(event interface{}) {
 		text = "removed reaction: "
 		channelID = e.ChannelID
 		messageID = e.MessageID
+		receiver = e.Receiver
 		sender = e.Sender
 		channelType = e.ChannelType
 		reaction = e.Reaction
@@ -493,7 +575,7 @@ func (u *User) handleReactionEvent(event interface{}) {
 	if !u.v.GetBool(u.br.Protocol() + ".disableemoji") {
 		reactionEmoji := emoji.FromAlias(reaction)
 		if reactionEmoji != nil {
-			reaction = fmt.Sprintf("%s", reactionEmoji)
+			reaction = reactionEmoji.Emoji
 		}
 	}
 
@@ -501,7 +583,7 @@ func (u *User) handleReactionEvent(event interface{}) {
 		e := &bridge.DirectMessageEvent{
 			Text:      "\x1d" + text + reaction + "\x1d" + message,
 			ChannelID: channelID,
-			Receiver:  u.UserInfo,
+			Receiver:  receiver,
 			Sender:    sender,
 			MessageID: messageID,
 			Event:     "reaction",
@@ -530,7 +612,7 @@ func (u *User) CreateUserFromInfo(info *bridge.UserInfo) *User {
 }
 
 func (u *User) CreateUsersFromInfo(info []*bridge.UserInfo) []*User {
-	var users []*User
+	users := make([]*User, 0, len(info))
 
 	for _, userinfo := range info {
 		if userinfo.Me {
@@ -940,12 +1022,12 @@ func (u *User) prefixContext(channelID, messageID, parentID, event string) strin
 
 	if u.v.GetString(u.br.Protocol()+".threadcontext") == "mattermost" || u.v.GetString(u.br.Protocol()+".threadcontext") == "mattermost+post" {
 		if parentID == "" {
-			return fmt.Sprintf("[@@%s]", messageID)
+			return "[@@" + messageID + "]"
 		}
 		if u.v.GetString(u.br.Protocol()+".threadcontext") == "mattermost" || parentID == messageID {
-			return fmt.Sprintf("[%s@@%s]", prefixChar, parentID)
+			return "[" + prefixChar + "@@" + "parentID" + "]"
 		}
-		return fmt.Sprintf("[%s@@%s,@@%s]", prefixChar, parentID, messageID)
+		return "[" + prefixChar + "@@" + parentID + ",@@" + messageID + "]"
 	}
 
 	u.msgMapMutex.Lock()
@@ -1038,12 +1120,12 @@ func (u *User) getMattermostVersion() string {
 }
 
 func (u *User) handleMessageThreadContext(channelID, messageID, parentID, event, text string) (string, string, string, bool, int) {
-	newText := text
 	prefix := ""
 	suffix := ""
 	maxlen := 440
 	showContext := false
 
+	newText := text
 	switch {
 	case u.v.GetBool(u.br.Protocol()+".prefixcontext") && strings.HasPrefix(text, "\x01"):
 		prefix = u.prefixContext(channelID, messageID, parentID, event) + " "
@@ -1051,7 +1133,6 @@ func (u *User) handleMessageThreadContext(channelID, messageID, parentID, event,
 		maxlen = len(newText)
 	case u.v.GetBool(u.br.Protocol()+".prefixcontext") && u.v.GetBool(u.br.Protocol()+".showcontextmulti"):
 		prefix = u.prefixContext(channelID, messageID, parentID, event) + " "
-		newText = text
 		showContext = true
 		maxlen -= len(prefix)
 	case u.v.GetBool(u.br.Protocol() + ".prefixcontext"):
@@ -1063,7 +1144,6 @@ func (u *User) handleMessageThreadContext(channelID, messageID, parentID, event,
 		maxlen = len(newText)
 	case u.v.GetBool(u.br.Protocol()+".suffixcontext") && u.v.GetBool(u.br.Protocol()+".showcontextmulti"):
 		suffix = " " + u.prefixContext(channelID, messageID, parentID, event)
-		newText = text
 		showContext = true
 		maxlen -= len(suffix)
 	case u.v.GetBool(u.br.Protocol() + ".suffixcontext"):
@@ -1072,106 +1152,4 @@ func (u *User) handleMessageThreadContext(channelID, messageID, parentID, event,
 	}
 
 	return newText, prefix, suffix, showContext, maxlen
-}
-
-//nolint:gocyclo
-func (u *User) formatCodeBlockText(text string, prefix string, codeBlockBackTick bool, codeBlockTilde bool, lexer string) (string, bool, bool, string) {
-	linePrefix := u.v.GetString(u.br.Protocol() + ".codeblockprefix")
-	if linePrefix != "" {
-		unq, err := strconv.Unquote(`"` + linePrefix + `"`)
-		if err == nil {
-			linePrefix = unq
-		}
-	}
-
-	// skip empty lines for anything not part of a code block.
-	if text == "" {
-		if codeBlockBackTick || codeBlockTilde {
-			return linePrefix + " ", codeBlockBackTick, codeBlockTilde, lexer
-		}
-		return "", codeBlockBackTick, codeBlockTilde, lexer
-	}
-
-	syntaxHighlighting := u.v.GetString(u.br.Protocol() + ".syntaxhighlighting")
-
-	if (strings.HasPrefix(text, "```") || strings.HasPrefix(text, prefix+"```")) && !codeBlockTilde {
-		codeBlockBackTick = !codeBlockBackTick
-		if codeBlockBackTick {
-			lexer = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(text, "```"), prefix+"```"))
-		}
-		return text, codeBlockBackTick, codeBlockTilde, lexer
-	}
-	if (strings.HasPrefix(text, "~~~") || strings.HasPrefix(text, prefix+"~~~")) && !codeBlockBackTick {
-		codeBlockTilde = !codeBlockTilde
-		if codeBlockTilde {
-			lexer = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(text, "~~~"), prefix+"~~~"))
-		}
-		return text, codeBlockBackTick, codeBlockTilde, lexer
-	}
-
-	if !(codeBlockBackTick || codeBlockTilde) {
-		return text, codeBlockBackTick, codeBlockTilde, lexer
-	}
-
-	if syntaxHighlighting == "" || lexer == "" {
-		return linePrefix + text, codeBlockBackTick, codeBlockTilde, lexer
-	}
-
-	formatter := "terminal256"
-	style := "pygments"
-	v := strings.SplitN(syntaxHighlighting, ":", 2)
-	if len(v) == 2 {
-		formatter = v[0]
-		style = v[1]
-	}
-
-	var b bytes.Buffer
-	err := quick.Highlight(&b, text, lexer, formatter, style)
-	if err == nil {
-		text = linePrefix + b.String()
-		// Work around https://github.com/alecthomas/chroma/issues/716
-		text = strings.ReplaceAll(text, "\n", "")
-	}
-
-	return text, codeBlockBackTick, codeBlockTilde, lexer
-}
-
-// Use static initialisation to optimize.
-// Bold & Italic - https://www.markdownguide.org/basic-syntax#bold-and-italic
-var boldItalicRegExp = []*regexp.Regexp{
-	regexp.MustCompile(`(?:\*\*\*)+?(.+?)(?:\*\*\*)+?`),
-	regexp.MustCompile(`\b(?:\_\_\_)+?(.+?)(?:\_\_\_)+?\b`),
-	regexp.MustCompile(`\b(?:\_\_\*)+?(.+?)(?:\*\_\_)+?\b`),
-	regexp.MustCompile(`\b(?:\*\*\_)+?(.+?)(?:\_\*\*)+?\b`),
-}
-
-// Bold - https://www.markdownguide.org/basic-syntax#bold
-var boldRegExp = []*regexp.Regexp{
-	regexp.MustCompile(`(?:\*\*)+?(.+?)(?:\*\*)+?`),
-	regexp.MustCompile(`\b(?:\_\_)+?(.+?)(?:\_\_)+?\b`),
-}
-
-// Italic - https://www.markdownguide.org/basic-syntax#italic
-var italicRegExp = []*regexp.Regexp{
-	regexp.MustCompile(`(?:\*)+?([^\*]+?)(?:\*)+?`),
-	regexp.MustCompile(`\b(?:\_)+?([^_]+?)(?:\_)+?\b`),
-}
-
-func markdown2irc(msg string) string {
-	// Bold & Italic 0x02+0x1d
-	for _, re := range boldItalicRegExp {
-		msg = re.ReplaceAllString(msg, "\x02\x1d$1\x1d\x02")
-	}
-
-	// Bold 0x02
-	for _, re := range boldRegExp {
-		msg = re.ReplaceAllString(msg, "\x02$1\x02")
-	}
-
-	// Italic 0x1d
-	for _, re := range italicRegExp {
-		msg = re.ReplaceAllString(msg, "\x1d$1\x1d")
-	}
-
-	return msg
 }

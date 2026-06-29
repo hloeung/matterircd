@@ -244,7 +244,7 @@ func replay(u *User, toUser *User, args []string, service string) {
 	logSince := "server"
 	channame := brchannel.Name
 	if !brchannel.DM {
-		channame = fmt.Sprintf("#%s", brchannel.Name)
+		channame = "#" + brchannel.Name
 	}
 
 	// We used to store last viewed at if present.
@@ -814,9 +814,10 @@ func updatelastviewed(u *User, toUser *User, args []string, service string) {
 
 var cmds = map[string]Command{
 	"details":          {handler: details, login: true, minParams: 1, maxParams: 1},
+	"header":           {handler: channelHeader, login: true, minParams: 2, maxParams: -1},
 	"lastsent":         {handler: lastsent, login: true, minParams: 0, maxParams: 0},
-	"logout":           {handler: logout, login: true, minParams: 0, maxParams: 0},
 	"login":            {handler: login, minParams: 2, maxParams: 5},
+	"logout":           {handler: logout, login: true, minParams: 0, maxParams: 0},
 	"part":             {handler: part, login: true, minParams: 1, maxParams: 1},
 	"replay":           {handler: replay, login: true, minParams: 1, maxParams: 2},
 	"scrollback":       {handler: scrollback, login: true, minParams: 2, maxParams: 2},
@@ -931,5 +932,76 @@ func parseCommandString(line string) ([]string, error) {
 func lastsent(u *User, toUser *User, args []string, service string) {
 	for _, line := range u.br.GetLastSentMsgs() {
 		u.MsgUser(toUser, line)
+	}
+}
+
+//nolint:funlen
+func channelHeader(u *User, toUser *User, args []string, service string) {
+	if service == "slack" {
+		u.MsgUser(toUser, "not implemented")
+		return
+	}
+
+	if len(args) < 2 {
+		u.MsgUser(toUser, "need HEADER GET (#<channel>|<user>)")
+		u.MsgUser(toUser, "e.g. HEADER GET #bugs")
+		u.MsgUser(toUser, "need HEADER SET (#<channel>|<user>) <new header>")
+		u.MsgUser(toUser, "e.g. HEADER SET #bugs I have just set a new header here")
+		return
+	}
+
+	cmd := strings.ToLower(args[0])
+	channel := args[1]
+	if cmd == "set" {
+		if len(args) <= 2 {
+			u.MsgUser(toUser, "need HEADER SET (#<channel>|<user>) <new header>")
+			u.MsgUser(toUser, "e.g. HEADER SET #bugs I have just set a new header here")
+			return
+		}
+		args = args[2:]
+	}
+
+	var channelID, channelName string
+	DMUser, exists := u.Srv.HasUser(channel)
+
+	switch {
+	case strings.HasPrefix(channel, "#"):
+		channelName = strings.ReplaceAll(channel, "#", "")
+		channelID = u.br.GetChannelID(channelName, u.br.GetMe().TeamID)
+	case exists && DMUser.Ghost:
+		// We need to sort the two user IDs to construct the DM
+		// channel name.
+		userIDs := []string{u.User, DMUser.User}
+		sort.Strings(userIDs)
+		channelName = userIDs[0] + "__" + userIDs[1]
+		channelID = u.br.GetChannelID(channelName, u.br.GetMe().TeamID)
+	default:
+		u.MsgUser(toUser, "need HEADER GET (#<channel>|<user>)")
+		u.MsgUser(toUser, "e.g. HEADER GET #bugs")
+		u.MsgUser(toUser, "need HEADER SET (#<channel>|<user>) <new header>")
+		u.MsgUser(toUser, "e.g. HEADER SET #bugs I have just set a new header here")
+		return
+	}
+
+	if channelID == "" {
+		u.MsgUser(toUser, "channel does not exist")
+		return
+	}
+
+	switch {
+	case cmd == "get":
+		currentHeader := u.br.Topic(channelID)
+		u.MsgUser(toUser, channel+"'s channel header is: "+currentHeader)
+	case cmd == "set":
+		err := u.br.SetTopic(channelID, strings.Join(args, " "))
+		if err != nil {
+			u.MsgUser(toUser, "failed to set header: "+err.Error())
+		}
+	default:
+		u.MsgUser(toUser, "need HEADER GET (#<channel>|<user>)")
+		u.MsgUser(toUser, "e.g. HEADER GET #bugs")
+		u.MsgUser(toUser, "need HEADER SET (#<channel>|<user>) <new header>")
+		u.MsgUser(toUser, "e.g. HEADER SET #bugs I have just set a new header here")
+		return
 	}
 }

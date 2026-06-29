@@ -167,7 +167,7 @@ func (ch *channel) Part(u *User, text string) {
 			Prefix:   ch.Prefix(),
 			Command:  irc.ERR_NOTONCHANNEL,
 			Params:   []string{ch.name},
-			Trailing: "You're not on that channel",
+			Trailing: "User not on that channel",
 		})
 
 		return
@@ -260,36 +260,51 @@ func (ch *channel) Topic(from Prefixer, text string) {
 
 // SendNamesResponse sends a User messages indicating the current members of the Channel.
 func (ch *channel) SendNamesResponse(u *User) error {
-	msgs := []*irc.Message{}
-	line := ""
-	i := 0
+	names := ch.Names()
+	prefix := ch.Prefix()
+	if len(names) == 0 {
+		end := &irc.Message{
+			Prefix:   prefix,
+			Params:   []string{u.Nick, ch.name},
+			Command:  irc.RPL_ENDOFNAMES,
+			Trailing: "End of /NAMES list.",
+		}
+		return u.Encode(end)
+	}
 
-	for _, name := range ch.Names() {
+	msgs := make([]*irc.Message, 0, len(names)+1)
+
+	var line strings.Builder
+	line.Grow(512)
+	i := 0
+	for _, name := range names {
 		if i+len(name) < 400 {
-			line += name + " "
+			line.WriteString(name)
+			line.WriteByte(' ')
 			i += len(name)
 		} else {
 			msgs = append(msgs, &irc.Message{
-				Prefix:   ch.Prefix(),
+				Prefix:   prefix,
 				Command:  irc.RPL_NAMREPLY,
 				Params:   []string{u.Nick, "=", ch.name},
-				Trailing: line,
+				Trailing: line.String(),
 			})
-			line = ""
-			line += name + " "
+			line.Reset()
+			line.WriteString(name)
+			line.WriteByte(' ')
 			i = len(name)
 		}
 	}
 
 	msgs = append(msgs, &irc.Message{
-		Prefix:   ch.Prefix(),
+		Prefix:   prefix,
 		Command:  irc.RPL_NAMREPLY,
 		Params:   []string{u.Nick, "=", ch.name},
-		Trailing: line,
+		Trailing: line.String(),
 	})
 
 	msgs = append(msgs, &irc.Message{
-		Prefix:   ch.Prefix(),
+		Prefix:   prefix,
 		Params:   []string{u.Nick, ch.name},
 		Command:  irc.RPL_ENDOFNAMES,
 		Trailing: "End of /NAMES list.",
@@ -300,22 +315,18 @@ func (ch *channel) SendNamesResponse(u *User) error {
 
 func (ch *channel) BatchJoin(inputusers []*User) error {
 	// TODO: Check if user is already here?
-	var users []*User
+	users := make([]*User, 0, len(inputusers))
 
 	ch.mu.Lock()
-
 	for _, u := range inputusers {
 		if _, exists := ch.usersIdx[u.ID()]; !exists {
+			ch.usersIdx[u.ID()] = u
 			users = append(users, u)
 		}
 	}
-
 	ch.mu.Unlock()
 
 	for _, u := range users {
-		ch.mu.Lock()
-		ch.usersIdx[u.ID()] = u
-		ch.mu.Unlock()
 		u.Lock()
 		u.channels[ch] = struct{}{}
 		u.Unlock()

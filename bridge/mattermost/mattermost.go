@@ -11,8 +11,10 @@ import (
 	"time"
 
 	"github.com/42wim/matterircd/bridge"
+	"github.com/42wim/matterircd/utils"
 	"github.com/davecgh/go-spew/spew"
 	lru "github.com/hashicorp/golang-lru"
+	"github.com/kenshaw/emoji"
 	prefixed "github.com/matterbridge/logrus-prefixed-formatter"
 	"github.com/matterbridge/matterclient"
 	"github.com/mattermost/mattermost-server/v6/model"
@@ -158,6 +160,8 @@ func (m *Mattermost) handleWsMessage(quitChan chan struct{}) {
 			case model.WebsocketEventPostEdited:
 				m.handleWsActionPost(message.Raw)
 			case model.WebsocketEventPostDeleted:
+				m.handleWsActionPost(message.Raw)
+			case model.WebsocketEventEphemeralMessage:
 				m.handleWsActionPost(message.Raw)
 			case model.WebsocketEventUserRemoved:
 				m.handleWsActionUserRemoved(message.Raw)
@@ -513,54 +517,43 @@ func (m *Mattermost) GetChannelName(channelID string) string {
 
 func (m *Mattermost) GetChannelUsers(channelID string) ([]*bridge.UserInfo, error) {
 	var (
-		mmusers, mmusersPaged []*model.User
-		users                 []*bridge.UserInfo
-		err                   error
-		resp                  *model.Response
+		mmusersPaged []*model.User
+		err          error
+		resp         *model.Response
 	)
 
 	idx := 0
-	max := 200
+	const batchSize = 200
+	users := make([]*bridge.UserInfo, 0, batchSize)
 
 	for {
-		mmusersPaged, resp, err = m.mc.Client.GetUsersInChannel(channelID, idx, max, "")
-		if err == nil {
+		mmusersPaged, resp, err = m.mc.Client.GetUsersInChannel(channelID, idx, batchSize, "")
+		if err != nil {
+			if rlErr := m.mc.HandleRatelimit("GetUsersInChannel", resp); rlErr != nil {
+				return nil, rlErr
+			}
+			continue
+		}
+
+		for _, mmuser := range mmusersPaged {
+			users = append(users, m.createUser(mmuser))
+		}
+
+		if len(mmusersPaged) < batchSize {
 			break
 		}
 
-		if err = m.mc.HandleRatelimit("GetUsersInChannel", resp); err != nil {
-			return nil, err
-		}
-	}
-
-	for len(mmusersPaged) > 0 {
-		for {
-			mmusersPaged, resp, err = m.mc.Client.GetUsersInChannel(channelID, idx, max, "")
-			if err == nil {
-				idx++
-				time.Sleep(time.Millisecond * 200)
-				mmusers = append(mmusers, mmusersPaged...)
-
-				break
-			}
-
-			if err := m.mc.HandleRatelimit("GetUsersInChannel", resp); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	for _, mmuser := range mmusers {
-		users = append(users, m.createUser(mmuser))
+		idx++
 	}
 
 	return users, nil
 }
 
 func (m *Mattermost) GetUsers() []*bridge.UserInfo {
-	var users []*bridge.UserInfo
+	mmusers := m.mc.GetUsers()
+	users := make([]*bridge.UserInfo, 0, len(mmusers))
 
-	for _, mmuser := range m.mc.GetUsers() {
+	for _, mmuser := range mmusers {
 		users = append(users, m.createUser(mmuser))
 	}
 
@@ -648,8 +641,6 @@ func (m *Mattermost) GetUserByUsername(username string) *bridge.UserInfo {
 }
 
 func (m *Mattermost) createUser(mmuser *model.User) *bridge.UserInfo {
-	teamID := ""
-
 	if mmuser == nil {
 		return &bridge.UserInfo{}
 	}
@@ -659,14 +650,17 @@ func (m *Mattermost) createUser(mmuser *model.User) *bridge.UserInfo {
 		nick = mmuser.Nickname
 	}
 
-	me := false
-
-	if mmuser.Id == m.mc.User.Id {
-		me = true
+	me := mmuser.Id == m.mc.User.Id
+	teamID := ""
+	if me {
 		teamID = m.mc.Team.ID
 	}
 
-	mentionkeys := mmuser.NotifyProps["mention_keys"]
+	// We only care about mentions for ourselves
+	var mentionKeys []string
+	if keys := mmuser.NotifyProps["mention_keys"]; me && keys != "" {
+		mentionKeys = strings.Split(keys, ",")
+	}
 
 	info := &bridge.UserInfo{
 		Nick:        nick,
@@ -680,7 +674,7 @@ func (m *Mattermost) createUser(mmuser *model.User) *bridge.UserInfo {
 		Username:    mmuser.Username,
 		FirstName:   mmuser.FirstName,
 		LastName:    mmuser.LastName,
-		MentionKeys: strings.Split(mentionkeys, ","),
+		MentionKeys: mentionKeys,
 	}
 
 	return info
@@ -723,6 +717,11 @@ func isValidNick(s string) bool {
 	return true
 }
 
+const (
+	blockquoteCharNonUnicode = "|"
+	blockquoteCharUnicode    = "▕"
+)
+
 //nolint:forcetypeassert
 func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 	postData, ok := rmsg.GetData()["post"].(string)
@@ -730,15 +729,17 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 		return true
 	}
 
+	disableMarkdown := m.v.GetBool("mattermost.disablemarkdown")
+	disableEmoji := m.v.GetBool("mattermost.disableemoji")
+	useUnicode := m.v.GetBool("mattermost.unicode")
+	blockquoteChar := blockquoteCharNonUnicode
+	if useUnicode {
+		blockquoteChar = blockquoteCharUnicode
+	}
+	shortenMsgLen := m.v.GetInt("mattermost.ShortenRepliesTo")
+
 	var data model.Post
 	if err := json.NewDecoder(strings.NewReader(postData)).Decode(&data); err != nil {
-		return true
-	}
-
-	extraProps := data.GetProps()
-
-	if rmsg.EventType() == model.WebsocketEventPostEdited && data.HasReactions {
-		logger.Debugf("edit post with reactions, do not relay. We don't know if a reaction is added or the post has been edited")
 		return true
 	}
 
@@ -746,6 +747,7 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 		return false
 	}
 
+	extraProps := data.GetProps()
 	if tag, ok := extraProps["matterircd_"+m.GetMe().User]; !ok || tag != m.instanceTag {
 		return false
 	}
@@ -772,14 +774,25 @@ func (m *Mattermost) wsActionPostSkip(rmsg *model.WebSocketEvent) bool {
 	if data.RootId != "" {
 		msgID = data.RootId
 		if !m.v.GetBool("mattermost.hidereplies") {
-			newMsg, err := m.addParentMsg(data.RootId, postfix, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
+			newMsg, err := m.addParentMsg(data.RootId, postfix, shortenMsgLen, "@", useUnicode)
 			if err == nil {
 				postfix += newMsg
 			}
 		}
 	}
 
-	m.msgLastSentCache.Add(msgID, fmt.Sprintf("%s: %s", channel, data.Message+postfix))
+	lastSentMsg := strings.ReplaceAll(data.Message, "\n", " ")
+
+	if !disableMarkdown {
+		lastSentMsg = utils.Markdown2irc(lastSentMsg, blockquoteChar)
+	}
+
+	if !disableEmoji {
+		lastSentMsg = emoji.ReplaceAliases(lastSentMsg)
+	}
+
+	lastSentMsg = maybeShorten(lastSentMsg, 90, "@", useUnicode)
+	m.msgLastSentCache.Add(msgID, channel+": "+lastSentMsg+postfix)
 
 	logger.Debugf("message is sent from this matterircd instance, not relaying %#v", data.Message)
 	return true
@@ -794,38 +807,54 @@ func maybeShorten(msg string, newLen int, uncounted string, unicode bool) string
 	if newLen == 0 || len(msg) < newLen {
 		return msg
 	}
+
 	ellipsis := "..."
 	if unicode {
 		ellipsis = "…"
 	}
-	newMsg := ""
-	for _, word := range strings.Split(strings.ReplaceAll(msg, "\n", " "), " ") {
-		if newMsg == "" {
-			newMsg = word
-			continue
-		}
-		if len(newMsg) < newLen {
-			skipped := false
-			if uncounted != "" && strings.HasPrefix(word, uncounted) {
-				newLen += len(word) + 1
-				skipped = true
+
+	var b strings.Builder
+	b.Grow(min(len(msg), newLen+8))
+
+	fields := strings.FieldsFunc(msg, func(r rune) bool {
+		return r == ' ' || r == '\n'
+	})
+
+	for _, word := range fields {
+		if b.Len() > 0 {
+			if b.Len() >= newLen {
+				break
 			}
+			b.WriteByte(' ')
+		}
+
+		if uncounted != "" && strings.HasPrefix(word, uncounted) {
+			newLen += len(word) + 1
+		} else if len(word) > newLen {
 			// Truncate very long words, but only if they were not skipped, on the
 			// assumption that such words are important enough to be preserved whole.
-			if !skipped && len(word) > newLen {
-				word = fmt.Sprintf("%s[%s]", word[0:(newLen*2/3)], ellipsis)
-			}
-			newMsg = fmt.Sprintf("%s %s", newMsg, word)
-			continue
+			word = word[:newLen*2/3] + "[" + ellipsis + "]"
 		}
-		break
+
+		b.WriteString(word)
 	}
 
-	return fmt.Sprintf("%s %s", newMsg, ellipsis)
+	b.WriteByte(' ')
+	b.WriteString(ellipsis)
+
+	return b.String()
 }
 
 func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncounted string, unicode bool) (string, error) {
 	var replyMessage string
+
+	disableMarkdown := m.v.GetBool("mattermost.disablemarkdown")
+	disableEmoji := m.v.GetBool("mattermost.disableemoji")
+	useUnicode := m.v.GetBool("mattermost.unicode")
+	blockquoteChar := blockquoteCharNonUnicode
+	if useUnicode {
+		blockquoteChar = blockquoteCharUnicode
+	}
 
 	// Search and use cached reply if it exists.
 	// None found, so we'll need to create one and save it for future uses.
@@ -850,10 +879,22 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 				}
 			}
 		}
+		msg = strings.ReplaceAll(msg, "\n", " ")
+		// Since we're combining multi lines into one, make code blocks single code/monospace
+		msg = strings.ReplaceAll(msg, "```", "`")
+		msg = strings.ReplaceAll(msg, "~~~", "`")
+
+		if !disableMarkdown {
+			msg = utils.Markdown2irc(msg, blockquoteChar)
+		}
+
+		if !disableEmoji {
+			msg = emoji.ReplaceAliases(msg)
+		}
 
 		parentUser := m.GetUser(parentPost.UserId)
 		parentMessage := maybeShorten(msg, newLen, uncounted, unicode)
-		replyMessage = fmt.Sprintf(" (re @%s: %s)", parentUser.Nick, parentMessage)
+		replyMessage = " (re @" + parentUser.Nick + ": " + parentMessage + ")"
 		logger.Debugf("Created reply for parent post %s:%s", parentID, replyMessage)
 
 		m.msgParentCache.Add(parentID, replyMessage)
@@ -861,11 +902,16 @@ func (m *Mattermost) addParentMsg(parentID string, msg string, newLen int, uncou
 		logger.Debugf("Found saved reply for parent post %s, using:%s", parentID, replyMessage)
 	}
 
-	return strings.TrimRight(msg, "\n") + replyMessage, nil
+	if strings.HasSuffix(msg, "\n") { //nolint:gosimple
+		msg = msg[:len(msg)-1]
+	}
+	return msg + replyMessage, nil
 }
 
-var validIRCNickRegExp = regexp.MustCompile("^[a-zA-Z0-9_]*$")
-var channelMentionsRegExp = regexp.MustCompile(`@(channel|all|here)\W`)
+var (
+	validIRCNickRegExp    = regexp.MustCompile("^[a-zA-Z0-9_]*$")
+	channelMentionsRegExp = regexp.MustCompile(`@(channel|all|here)\W`)
+)
 
 //nolint:funlen,gocognit,gocyclo,cyclop,forcetypeassert
 func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
@@ -886,13 +932,16 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 		return
 	}
 
+	useUnicode := m.v.GetBool("mattermost.unicode")
+
 	postfix := ""
 	if !m.v.GetBool("mattermost.hidereplies") && data.RootId != "" {
-		message, err := m.addParentMsg(data.RootId, postfix, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", m.v.GetBool("mattermost.unicode"))
+		message, err := m.addParentMsg(data.RootId, postfix, m.v.GetInt("mattermost.ShortenRepliesTo"), "@", useUnicode)
 		if err != nil {
 			logger.Errorf("Unable to get parent post for %#v", data) //nolint:govet
+		} else {
+			postfix = message
 		}
-		postfix += message
 	}
 
 	// create new "ghost" user
@@ -919,16 +968,6 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 		}
 	}
 
-	if data.Type == model.PostTypeJoinChannel || data.Type == model.PostTypeLeaveChannel ||
-		data.Type == model.PostTypeAddToChannel ||
-		data.Type == model.PostTypeRemoveFromChannel {
-		logger.Debugf("join/leave message. not relaying %#v", data.Message)
-		m.UpdateChannels()
-
-		m.wsActionPostJoinLeave(&data, extraProps)
-		return
-	}
-
 	channelType := ""
 	if t, ok := wsData["channel_type"].(string); ok {
 		channelType = t
@@ -938,7 +977,15 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 		dmchannel = t
 	}
 
-	if data.Type == model.PostTypeHeaderChange {
+	switch data.Type {
+	case model.PostTypeJoinChannel, model.PostTypeLeaveChannel, model.PostTypeAddToChannel, model.PostTypeRemoveFromChannel:
+		logger.Debugf("join/leave message. not relaying %#v", data.Message)
+		_ = m.UpdateChannels()
+
+		m.wsActionPostJoinLeave(&data, extraProps)
+		return
+
+	case model.PostTypeHeaderChange:
 		if _, ok := extraProps["new_header"].(string); !ok {
 			return
 		}
@@ -987,22 +1034,19 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 
 		m.eventChan <- event
 		return
-	}
 
-	if data.Type == model.PostTypeAddToTeam || data.Type == model.PostTypeRemoveFromTeam {
+	case model.PostTypeSystemGeneric, model.PostTypeEphemeral, model.PostTypeAddToTeam, model.PostTypeRemoveFromTeam:
 		ghost = &bridge.UserInfo{
 			Nick: "system",
 		}
 	}
 
-	// msgs := strings.Split(data.Message, "\n")
-	msgs := []string{data.Message}
+	msg := data.Message
+	eventType := rmsg.EventType()
 
 	// add an edited/deleted string when messages are edited/deleted
-	if len(msgs) > 0 && (rmsg.EventType() == model.WebsocketEventPostEdited ||
-		rmsg.EventType() == model.WebsocketEventPostDeleted) {
-
-		if rmsg.EventType() == model.WebsocketEventPostDeleted {
+	if eventType == model.WebsocketEventPostEdited || eventType == model.WebsocketEventPostDeleted {
+		if eventType == model.WebsocketEventPostDeleted {
 			postfix += " \x1d(deleted)\x1d"
 		} else {
 			postfix += " \x1d(edited)\x1d"
@@ -1019,109 +1063,92 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 		m.msgParentCache.Remove(data.Id)
 	}
 
-	for _, msg := range msgs {
-		switch {
-		case channelType == "D":
-			event := &bridge.Event{
-				Type: "direct_message",
-			}
+	attachments := data.Attachments()
 
-			if data.Type == "me" {
-				msg = strings.TrimLeft(msg, "*")
-				msg = strings.TrimRight(msg, "*")
-				msg = "\x01ACTION " + msg + " \x01"
-			}
-
-			d := &bridge.DirectMessageEvent{
-				Text:      msg + postfix,
-				ChannelID: data.ChannelId,
-				MessageID: data.Id,
-				Event:     rmsg.EventType(),
-				ParentID:  data.RootId,
-			}
-
-			if ghost.Me {
-				d.Sender = ghost
-				d.Receiver = m.getDMUser(dmchannel)
-			} else {
-				d.Sender = m.getDMUser(dmchannel)
-				d.Receiver = ghost
-			}
-
-			if d.Sender == nil || d.Receiver == nil {
-				logger.Errorf("dm: couldn't resolve sender or receiver: %#v", rmsg)
-				return
-			}
-
-			event.Data = d
-
-			m.eventChan <- event
-
-			if data.Type == "me" {
-				break
-			}
-		default:
-			if data.Type == "me" {
-				msg = strings.TrimLeft(msg, "*")
-				msg = strings.TrimRight(msg, "*")
-				msg = "\x01ACTION " + msg + " \x01"
-			} else if data.Type == "slack_attachment" {
-				useFallback := msg == ""
-				// https://docs.slack.dev/tools/node-slack-sdk/reference/web-api/interfaces/MessageAttachment/
-				attachmentMsg := parseMessageAttachments(data.Attachments(), useFallback)
-				if msg != "" && attachmentMsg != "" {
-					msg += "\n"
-				}
-				msg += attachmentMsg
-			} else if data.Type == "custom_matterpoll" {
-				pollMsg := parseMatterpollToMsg(data.Attachments())
-				msg += pollMsg
-			} else if attachments := data.Attachments(); len(attachments) > 0 {
-				useFallback := msg == ""
-				// https://developers.mattermost.com/integrate/reference/message-attachments/
-				attachmentMsg := parseMessageAttachments(attachments, useFallback)
-				if msg != "" && attachmentMsg != "" {
-					msg += "\n"
-				}
-				msg += attachmentMsg
-			}
-
-			event := &bridge.Event{
-				Type: "channel_message",
-				Data: &bridge.ChannelMessageEvent{
-					Text:        msg + postfix,
-					ChannelID:   data.ChannelId,
-					Sender:      ghost,
-					ChannelType: channelType,
-					MessageID:   data.Id,
-					Event:       rmsg.EventType(),
-					ParentID:    data.RootId,
-				},
-			}
-
-			if !m.v.GetBool("mattermost.disabledefaultmentions") && channelMentionsRegExp.MatchString(data.Message) {
-				messageType := "notice"
-				event = &bridge.Event{
-					Type: "channel_message",
-					Data: &bridge.ChannelMessageEvent{
-						Text:        msg + postfix,
-						ChannelID:   data.ChannelId,
-						Sender:      ghost,
-						MessageType: messageType,
-						ChannelType: channelType,
-						MessageID:   data.Id,
-						Event:       rmsg.EventType(),
-						ParentID:    data.RootId,
-					},
-				}
-			}
-
-			m.eventChan <- event
-
-			if data.Type == "me" {
-				break
-			}
+	switch {
+	case data.Type == "me":
+		msg = "\x01ACTION " + strings.Trim(msg, "*") + " \x01"
+	case data.Type == "slack_attachment":
+		useFallback := msg == ""
+		// https://docs.slack.dev/tools/node-slack-sdk/reference/web-api/interfaces/MessageAttachment/
+		attachmentMsg := m.parseMessageAttachments(data.Attachments(), useFallback)
+		if msg == "" {
+			msg = attachmentMsg
+		} else if attachmentMsg != "" {
+			msg = msg + "\n" + attachmentMsg
 		}
+	case data.Type == "custom_matterpoll":
+		pollMsg := parseMatterpollToMsg(data.Attachments(), useUnicode)
+		msg += pollMsg
+	case len(attachments) > 0:
+		useFallback := msg == ""
+		// https://developers.mattermost.com/integrate/reference/message-attachments/
+		attachmentMsg := m.parseMessageAttachments(attachments, useFallback)
+		if msg == "" {
+			msg = attachmentMsg
+		} else if attachmentMsg != "" {
+			msg = msg + "\n" + attachmentMsg
+		}
+	}
+
+	if strings.HasSuffix(msg, "\n") { //nolint:gosimple
+		msg = msg[:len(msg)-1]
+	}
+	if postfix != "" {
+		msg += postfix
+	}
+
+	switch {
+	case channelType == "D":
+		event := &bridge.Event{
+			Type: "direct_message",
+		}
+
+		d := &bridge.DirectMessageEvent{
+			Text:      msg,
+			ChannelID: data.ChannelId,
+			MessageID: data.Id,
+			Event:     eventType,
+			ParentID:  data.RootId,
+		}
+
+		if ghost.Me {
+			d.Sender = ghost
+			d.Receiver = m.getDMUser(dmchannel)
+		} else {
+			d.Sender = m.getDMUser(dmchannel)
+			d.Receiver = ghost
+		}
+
+		if d.Sender == nil || d.Receiver == nil {
+			logger.Errorf("dm: couldn't resolve sender or receiver: %#v", rmsg)
+			return
+		}
+
+		event.Data = d
+
+		m.eventChan <- event
+	default:
+		messageType := ""
+		if !m.v.GetBool("mattermost.disabledefaultmentions") && channelMentionsRegExp.MatchString(data.Message) {
+			messageType = "notice"
+		}
+
+		event := &bridge.Event{
+			Type: "channel_message",
+			Data: &bridge.ChannelMessageEvent{
+				Text:        msg,
+				ChannelID:   data.ChannelId,
+				Sender:      ghost,
+				MessageType: messageType,
+				ChannelType: channelType,
+				MessageID:   data.Id,
+				Event:       eventType,
+				ParentID:    data.RootId,
+			},
+		}
+
+		m.eventChan <- event
 	}
 
 	if len(data.FileIds) > 0 {
@@ -1370,9 +1397,11 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 	}
 
 	userID := m.GetUser(reaction.UserId)
+	sender := userID
+	receiver := m.GetMe()
 
-	// No need to show added/removed reaction messages for our own.
-	if userID.Me {
+	// Don't show our own reaction messages unless mattermost.showownreactions is enabled.
+	if userID.Me && !m.v.GetBool("mattermost.showownreactions") {
 		logger.Debugf("Not showing own reaction: %s: %s", rmsg.EventType(), reaction.EmojiName)
 		return
 	}
@@ -1381,10 +1410,20 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 
 	channelType := ""
 	channelID := rmsg.GetBroadcast().ChannelId
-
 	name := m.GetChannelName(channelID)
 	if strings.Contains(name, "__") {
 		channelType = "D"
+		dmUser := m.getDMUser(name)
+		if dmUser == nil {
+			logger.Errorf("reaction: unable to resolve DM peer for channel %q", name)
+			return
+		}
+		if userID.Me {
+			receiver = m.getDMUser(name)
+		} else {
+			receiver = sender
+			sender = m.getDMUser(name)
+		}
 	}
 
 	var parentUser *bridge.UserInfo
@@ -1410,7 +1449,8 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 			Data: &bridge.ReactionAddEvent{
 				ChannelID:   channelID,
 				MessageID:   reaction.PostId,
-				Sender:      userID,
+				Receiver:    receiver,
+				Sender:      sender,
 				Reaction:    reaction.EmojiName,
 				ChannelType: channelType,
 				ParentUser:  parentUser,
@@ -1424,7 +1464,8 @@ func (m *Mattermost) handleReactionEvent(rmsg *model.WebSocketEvent) {
 			Data: &bridge.ReactionRemoveEvent{
 				ChannelID:   channelID,
 				MessageID:   reaction.PostId,
-				Sender:      userID,
+				Receiver:    receiver,
+				Sender:      sender,
 				Reaction:    reaction.EmojiName,
 				ChannelType: channelType,
 				ParentUser:  parentUser,
@@ -1487,7 +1528,7 @@ func (m *Mattermost) SearchUsers(query string) ([]*bridge.UserInfo, error) {
 		return nil, err
 	}
 
-	var brusers []*bridge.UserInfo
+	brusers := make([]*bridge.UserInfo, 0, len(users))
 
 	for _, u := range users {
 		brusers = append(brusers, m.createUser(u))
@@ -1551,10 +1592,25 @@ func (m *Mattermost) getDMUser(name interface{}) *bridge.UserInfo {
 	return nil
 }
 
-func parseMatterpollToMsg(attachments []*model.SlackAttachment) string {
+const (
+	messageAttachmentCharNonUnicode = "|"
+	// right one quarter block (U+1FB87)
+	messageAttachmentCharUnicode     = "🮇"
+	messageAttachmentSpaceNonUnicode = " "
+	// non-breaking space / no-break space / nbsp (U+00A0)
+	messageAttachmentSpaceUnicode = " "
+)
+
+func parseMatterpollToMsg(attachments []*model.SlackAttachment, unicode bool) string {
 	msg := ""
+	prefixChar := messageAttachmentCharNonUnicode
+	spaceChar := messageAttachmentSpaceNonUnicode
+	if unicode {
+		prefixChar = messageAttachmentCharUnicode
+		spaceChar = messageAttachmentSpaceUnicode
+	}
 	for _, attachment := range attachments {
-		prefix := "\033[1;38;2;0;82;204m|\033[0m "
+		prefix := "\033[1;38;2;0;82;204m" + prefixChar + "\033[0m" + spaceChar
 
 		if attachment.AuthorName != "" {
 			msg += prefix + "@" + attachment.AuthorName + "\n"
@@ -1565,7 +1621,7 @@ func parseMatterpollToMsg(attachments []*model.SlackAttachment) string {
 
 		for _, action := range attachment.Actions {
 			if strings.HasPrefix(action.Id, "vote") {
-				msg += prefix + "• " + action.Name + "\n"
+				msg += prefix + "•" + spaceChar + action.Name + "\n"
 			}
 		}
 
@@ -1581,7 +1637,7 @@ func parseMatterpollToMsg(attachments []*model.SlackAttachment) string {
 		}
 
 		for _, field := range attachment.Fields {
-			msg += prefix + "• " + field.Title + ": "
+			msg += prefix + "•" + spaceChar + field.Title + ":" + spaceChar
 			lines := strings.Split(fmt.Sprintf("%s", field.Value), "\n")
 			newPrefix := ""
 			for _, text := range lines {
@@ -1594,67 +1650,222 @@ func parseMatterpollToMsg(attachments []*model.SlackAttachment) string {
 	return strings.TrimRight(msg, "\n")
 }
 
-//nolint:funlen,gocyclo
-func parseMessageAttachments(attachments []*model.SlackAttachment, useFallback bool) string {
-	msg := ""
+const blockQuoteCharDefault = ">"
+
+//nolint:funlen,gocognit,gocyclo
+func (m *Mattermost) parseMessageAttachments(attachments []*model.SlackAttachment, useFallback bool) string {
+	useUnicode := m.v.GetBool("mattermost.unicode")
+	syntaxHighlighting := m.v.GetString("mattermost.syntaxhighlighting")
+	codeBlockPrefix := m.v.GetString("mattermost.codeblockprefix")
+	disableMarkdown := m.v.GetBool("mattermost.disablemarkdown")
+	disableEmoji := m.v.GetBool("mattermost.disableemoji")
+
+	prefixChar := messageAttachmentCharNonUnicode
+	spaceChar := messageAttachmentSpaceNonUnicode
+	blockquoteChar := blockquoteCharNonUnicode
+	if useUnicode {
+		prefixChar = messageAttachmentCharUnicode
+		spaceChar = messageAttachmentSpaceUnicode
+		blockquoteChar = blockquoteCharUnicode
+		// Downgrade heavy vertical to light as we're using heavy already
+		if strings.ContainsAny(codeBlockPrefix, "┃🮇▎") {
+			codeBlockPrefix = strings.Replace(codeBlockPrefix, "┃", "│", 1)
+			codeBlockPrefix = strings.Replace(codeBlockPrefix, "🮇", "▕", 1)
+			codeBlockPrefix = strings.Replace(codeBlockPrefix, "▎", "▏", 1)
+		}
+	}
+
+	var b strings.Builder
+
 	for _, attachment := range attachments {
-		prefix := "\033[1m|\033[0m "
+		prefix := "\033[1m" + prefixChar + "\033[0m" + spaceChar
 		switch {
 		// https://docs.slack.dev/tools/node-slack-sdk/reference/web-api/interfaces/MessageAttachment/#color
 		case attachment.Color == "danger":
-			prefix = "\033[31m|\033[0m "
+			prefix = "\033[31m" + prefixChar + "\033[0m" + spaceChar
 		case attachment.Color == "good":
-			prefix = "\033[1;32m|\033[0m "
+			prefix = "\033[32m" + prefixChar + "\033[0m" + spaceChar
 		case attachment.Color == "warning":
-			prefix = "\033[33m|\033[0m "
+			prefix = "\033[33m" + prefixChar + "\033[0m" + spaceChar
 		case strings.HasPrefix(attachment.Color, "#"):
 			hex := strings.TrimPrefix(attachment.Color, "#")
 			rr, _ := strconv.ParseInt(hex[0:2], 16, 0)
 			gg, _ := strconv.ParseInt(hex[2:4], 16, 0)
 			bb, _ := strconv.ParseInt(hex[4:6], 16, 0)
 			// https://modern.ircdocs.horse/formatting.html#hex-color
-			prefix = fmt.Sprintf("\033[1;38;2;%d;%d;%dm|\033[0m ", int(rr), int(gg), int(bb))
+			prefix = "\033[1;38;2;" +
+				strconv.Itoa(int(rr)) + ";" +
+				strconv.Itoa(int(gg)) + ";" +
+				strconv.Itoa(int(bb)) + "m" +
+				prefixChar + "\033[0m" + spaceChar
 		}
 
+		var fallbackText string
 		if useFallback {
-			msg += attachment.Fallback + "\n"
+			fallbackText, _, _ = strings.Cut(attachment.Fallback, "\n")
+
+			// In some cases, no fallback message present
+			// e.g. https://github.com/fluxcd/notification-controller/pull/1322
+			if fallbackText == "" {
+				fallbackText, _, _ = strings.Cut(attachment.Text, "\n")
+				if attachment.AuthorName != "" {
+					fallbackText = attachment.AuthorName + ":" + spaceChar + fallbackText
+				}
+			}
+
+			if !disableMarkdown {
+				fallbackText = utils.Markdown2irc(fallbackText, blockquoteChar)
+			}
+
+			if !disableEmoji {
+				fallbackText = emoji.ReplaceAliases(fallbackText)
+			}
+
+			b.WriteString(fallbackText)
+			b.WriteByte('\n')
 		}
 
 		if attachment.AuthorName != "" {
-			msg += prefix + attachment.AuthorName
+			b.WriteString(prefix)
+			b.WriteString(attachment.AuthorName)
 			if attachment.AuthorLink != "" {
-				msg += " (" + attachment.AuthorLink + ")"
+				b.WriteString(spaceChar)
+				b.WriteString("(")
+				b.WriteString(attachment.AuthorLink)
+				b.WriteString(")")
 			}
-			msg += "\n"
+			b.WriteByte('\n')
 		}
 		if attachment.Title != "" {
-			msg += prefix + attachment.Title
+			b.WriteString(prefix)
+			b.WriteByte('\x02')
+			b.WriteString(attachment.Title)
+			b.WriteByte('\x02')
 			if attachment.TitleLink != "" {
-				msg += " (" + attachment.TitleLink + ")"
+				b.WriteString(" (\x1d")
+				b.WriteString(attachment.TitleLink)
+				b.WriteByte('\x1d')
+				b.WriteByte(')')
 			}
-			msg += "\n"
+			b.WriteByte('\n')
 		}
 		if attachment.Text != "" {
+			lexer := ""
+			codeBlockBackTick := false
+			codeBlockTilde := false
 			lines := strings.Split(attachment.Text, "\n")
 			for _, text := range lines {
-				msg += prefix + text + "\n"
+				text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
+
+				if !disableMarkdown && !codeBlockBackTick && !codeBlockTilde {
+					text = utils.Markdown2irc(text, blockquoteChar)
+				}
+
+				if !disableEmoji && !codeBlockBackTick && !codeBlockTilde {
+					text = emoji.ReplaceAliases(text)
+				}
+
+				b.WriteString(prefix)
+				b.WriteString(text)
+				b.WriteByte('\n')
 			}
 		}
 		if attachment.ImageURL != "" {
-			msg += prefix + attachment.ImageURL + "\n"
+			b.WriteString(prefix)
+			b.WriteString(attachment.ImageURL)
+			b.WriteByte('\n')
 		}
-		for _, field := range attachment.Fields {
-			msg += prefix + field.Title + ": "
-			lines := strings.Split(fmt.Sprintf("%s", field.Value), "\n")
-			newPrefix := ""
-			for _, text := range lines {
-				msg += newPrefix + text + "\n"
-				newPrefix = prefix
+
+		for i := 0; i < len(attachment.Fields); {
+			field := attachment.Fields[i]
+			// In case the value has any new lines, strip it to avoid messing with our table format
+			val1Str := strings.TrimPrefix(fmt.Sprintf("%v", field.Value), "\n")
+
+			// Block quotes
+			if !disableMarkdown && strings.HasPrefix(val1Str, blockQuoteCharDefault) {
+				val1Str = strings.Replace(val1Str, blockQuoteCharDefault, prefixChar, 1)
+			}
+
+			// Check if this field and the next field are both flagged as "short"
+			if field.Short && i+1 < len(attachment.Fields) && attachment.Fields[i+1].Short {
+				nextField := attachment.Fields[i+1]
+				// Same, avoid messing with our table format
+				val2Str := strings.TrimPrefix(fmt.Sprintf("%v", nextField.Value), "\n")
+
+				b.WriteString(prefix)
+				b.WriteByte('\x02')
+				b.WriteString(fmt.Sprintf("%-30s %s", field.Title, nextField.Title))
+				b.WriteByte('\x02')
+				b.WriteByte('\n')
+
+				val1Lines := strings.Split(val1Str, "\n")
+				val2Lines := strings.Split(val2Str, "\n")
+
+				maxLines := len(val1Lines)
+				if len(val2Lines) > maxLines {
+					maxLines = len(val2Lines)
+				}
+
+				for j := 0; j < maxLines; j++ {
+					v1, v2 := "", ""
+					if j < len(val1Lines) {
+						v1 = val1Lines[j]
+					}
+					if j < len(val2Lines) {
+						v2 = val2Lines[j]
+					}
+					b.WriteString(prefix)
+					b.WriteString(fmt.Sprintf("%-30s %s", v1, v2))
+					b.WriteByte('\n')
+				}
+
+				i += 2
+			} else {
+				// Fallback to original behavior for long fields or unpaired short fields
+
+				if field.Title != "" {
+					b.WriteString(prefix)
+					b.WriteByte('\x02')
+					b.WriteString(field.Title)
+					b.WriteByte('\x02')
+					b.WriteByte('\n')
+				}
+
+				lexer := ""
+				codeBlockBackTick := false
+				codeBlockTilde := false
+				lines := strings.Split(val1Str, "\n")
+				for _, text := range lines {
+					text, codeBlockBackTick, codeBlockTilde, lexer = utils.FormatCodeBlockText(text, codeBlockBackTick, codeBlockTilde, lexer, syntaxHighlighting, codeBlockPrefix)
+
+					if !disableMarkdown && !codeBlockBackTick && !codeBlockTilde {
+						text = utils.Markdown2irc(text, blockquoteChar)
+					}
+
+					if !disableEmoji && !codeBlockBackTick && !codeBlockTilde {
+						text = emoji.ReplaceAliases(text)
+					}
+
+					// Ignore duplicate content when field value is the same as fallback
+					// e.g. https://github.com/jenkinsci/mattermost-plugin/pull/18
+					if useFallback && fallbackText != "" && text == fallbackText {
+						continue
+					}
+
+					b.WriteString(prefix)
+					b.WriteString(text)
+					b.WriteByte('\n')
+				}
+				i++
 			}
 		}
 	}
 
-	return strings.TrimRight(msg, "\n")
+	msg := b.String()
+	if strings.HasSuffix(msg, "\n") { //nolint:gosimple
+		msg = msg[:len(msg)-1]
+	}
+	return msg
 }
 
 func (m *Mattermost) GetLastSentMsgs() []string {
@@ -1663,7 +1874,7 @@ func (m *Mattermost) GetLastSentMsgs() []string {
 	for _, k := range m.msgLastSentCache.Keys() {
 		if v, ok := m.msgLastSentCache.Get(k); ok {
 			msg, _ := v.(string)
-			data = append(data, fmt.Sprintf("[@@%s] %s", k, msg))
+			data = append(data, "[@@"+fmt.Sprint(k)+"] "+msg)
 		}
 	}
 

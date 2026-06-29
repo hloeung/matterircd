@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -87,7 +88,7 @@ func New(login string, pass string, team string, server string, mfatoken string)
 	rootLogger := logrus.New()
 	rootLogger.SetFormatter(&prefixed.TextFormatter{
 		PrefixPadding: 13,
-		DisableColors: true,
+		DisableColors: false,
 		FullTimestamp: true,
 	})
 
@@ -230,15 +231,30 @@ func (m *Client) initClient(b *backoff.Backoff) error {
 	}
 	// login to mattermost
 	m.Client = model.NewAPIv4Client(uriScheme + m.Credentials.Server)
+
+	if m.Timeout == 0 {
+		m.Timeout = 10
+	}
 	m.Client.HTTPClient.Transport = &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: m.SkipTLSVerify, //nolint:gosec
 		},
 		Proxy: http.ProxyFromEnvironment,
-	}
 
-	if m.Timeout == 0 {
-		m.Timeout = 10
+		// https://github.com/matterbridge/matterclient/pull/9
+		DialContext: (&net.Dialer{
+			Timeout:   time.Second * time.Duration(m.Timeout),
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   time.Second * time.Duration(m.Timeout),
+		ExpectContinueTimeout: 1 * time.Second,
+
+		// https://github.com/matterbridge/matterclient/pull/9
+		// Additional tuning
+		MaxIdleConnsPerHost: 10,
 	}
 
 	m.Client.HTTPClient.Timeout = time.Second * time.Duration(m.Timeout)
@@ -303,8 +319,7 @@ func (m *Client) serverAlive(b *backoff.Backoff) error {
 // initialize user and teams
 // nolint:funlen
 func (m *Client) initUser() error {
-	m.Lock()
-	defer m.Unlock()
+
 	// we only load all team data on initial login.
 	// all other updates are for channels from our (primary) team only.
 	teams, _, err := m.Client.GetTeamsForUser(m.User.Id, "")
@@ -312,24 +327,23 @@ func (m *Client) initUser() error {
 		return err
 	}
 
+	const batchSize = 200
+
 	for _, team := range teams {
 		idx := 0
-		max := 200
 		usermap := make(map[string]*model.User)
+		for {
+			mmusers, _, err := m.Client.GetUsersInTeam(team.Id, idx, batchSize, "")
+			if err != nil {
+				return err
+			}
 
-		mmusers, _, err := m.Client.GetUsersInTeam(team.Id, idx, max, "")
-		if err != nil {
-			return err
-		}
-
-		for len(mmusers) > 0 {
 			for _, user := range mmusers {
 				usermap[user.Id] = user
 			}
 
-			mmusers, _, err = m.Client.GetUsersInTeam(team.Id, idx, max, "")
-			if err != nil {
-				return err
+			if len(mmusers) < batchSize {
+				break
 			}
 
 			idx++
@@ -337,6 +351,9 @@ func (m *Client) initUser() error {
 			time.Sleep(time.Millisecond * 200)
 		}
 		m.logger.Debugf("found %d users in team %s", len(usermap), team.Name)
+
+		m.Lock()
+
 		// add all users
 		for k, v := range usermap {
 			m.Users[k] = v
@@ -354,6 +371,8 @@ func (m *Client) initUser() error {
 			m.Team = t
 			m.logger.Debugf("initUser(): found our team %s (id: %s)", team.Name, team.Id)
 		}
+
+		m.Unlock()
 	}
 
 	return nil

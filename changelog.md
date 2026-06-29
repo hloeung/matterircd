@@ -1,3 +1,35 @@
+# v0.30.0
+
+## New features
+
+- general: Convert IRC formatting / emphasis to Markdown (#546)
+- general: Show emojis by converting their string/aliases to unicode (#564, #629, #631)
+- mattermost: Add support for Slack Message attachments (#575, #597, #598, #599, #601, #629)
+- mattermost: Add support for Direct Message (DM) header updates, as topics (#581)
+- mattermost: Add support for Mattermost's own message attachments (#610, #611, #612, #613, #617, #618, #621, #622, #625, #629)
+- mattermost: Add "details" service to show details on a specified Mattermost post (#605)
+- mattermost: Add support for ephemeral posts (#614, #616, #624)
+- mattermost: Add option to show own reactions "added to" or "removed from" posts (#630)
+- mattermost: Add basic Mattermost channel header get & set (#615)
+
+## Enhancement
+
+- mattermost: Improve message search (#553)
+- mattermost: Allow overriding Default Server & Default Team (#558)
+- mattermost: Updated to support and work with Mattermost 11 (#591)
+- mattermost: Improve Matterpoll messages (#602)
+- mattermost: Allow showing own posts when edited or deleted (#603)
+- mattermost: Allow prefixing code block texts (#606, #607, #608)
+- mattermost: Reduce Mattermost API GetData() calls (#609)
+- mattermost: Add support for markdown block quotes in addition to the usual bold & italics (#623)
+
+## Bugfix
+
+- mattermost: join and part/leave on message replay (#567)
+- mattermost: Fix addition of edited/deleted postfix/suffix so not on a new line (#600, #628)
+- mattermost: Fix crash for scrollback when no channel found or no access as reported in #586 (#604)
+
+
 # v0.29.0
 
 ## Enhancement

@@ -317,9 +317,9 @@ func (s *server) welcome(u *User) error {
 			Trailing: fmt.Sprintf("This server was created %s", s.created.Format(time.UnixDate)),
 		},
 		&irc.Message{
-			Prefix:   s.Prefix(),
-			Command:  irc.RPL_MYINFO,
-			Params:   []string{u.Nick, s.config.Name, s.config.Version, "o", "o"},
+			Prefix:  s.Prefix(),
+			Command: irc.RPL_MYINFO,
+			Params:  []string{u.Nick, s.config.Name, s.config.Version, "o", "o"},
 		},
 		&irc.Message{
 			Prefix:   s.Prefix(),
@@ -362,7 +362,9 @@ func (s *server) handle(u *User) {
 			if err == ErrUnknownCommand {
 				// TODO: Emit event?
 			} else if err != nil {
-				logger.Errorf("handler error for %s: %s", u.ID(), err.Error())
+				errMsg := fmt.Sprintf("%s: %#v", err.Error(), msg)
+				logger.Errorf("handler error for %s: %s", u.ID(), errMsg)
+				s.EncodeMessage(u, irc.PRIVMSG, []string{u.Nick}, errMsg) //nolint:errcheck
 			}
 		}(msg)
 	}

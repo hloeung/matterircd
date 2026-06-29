@@ -1,6 +1,7 @@
 package matterclient
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/mattermost/mattermost-server/v6/model"
@@ -207,11 +208,13 @@ func (m *Client) JoinChannel(channelID string) error {
 
 func (m *Client) UpdateChannelsTeam(teamID string) error {
 	var (
-		mmchannels []*model.Channel
-		resp       *model.Response
-		err        error
+		resp *model.Response
+		err  error
 	)
 
+	const batchSize = 200
+
+	mmchannels := make([]*model.Channel, 0, batchSize)
 	for {
 		mmchannels, resp, err = m.Client.GetChannelsForTeamForUser(teamID, m.User.Id, false, "")
 		if err == nil {
@@ -223,52 +226,33 @@ func (m *Client) UpdateChannelsTeam(teamID string) error {
 		}
 	}
 
-	for idx, t := range m.OtherTeams {
-		if t.ID == teamID {
-			m.Lock()
-			m.OtherTeams[idx].Channels = mmchannels
-			m.Unlock()
-		}
-	}
-
 	idx := 0
-	max := 200
-
-	var moreChannels []*model.Channel
-
+	moreChannels := make([]*model.Channel, 0, batchSize)
 	for {
-		mmchannels, resp, err = m.Client.GetPublicChannelsForTeam(teamID, idx, max, "")
-		if err == nil {
+		channels, resp, err := m.Client.GetPublicChannelsForTeam(teamID, idx, batchSize, "")
+		if err != nil {
+			if rlErr := m.HandleRatelimit("GetPublicChannelsForTeam", resp); rlErr != nil {
+				return rlErr
+			}
+			continue
+		}
+
+		moreChannels = append(moreChannels, channels...)
+
+		if len(channels) < batchSize {
 			break
 		}
-
-		if err := m.HandleRatelimit("GetPublicChannelsForTeam", resp); err != nil {
-			return err
-		}
+		idx++
 	}
 
-	for len(mmchannels) > 0 {
-		moreChannels = append(moreChannels, mmchannels...)
-
-		for {
-			mmchannels, resp, err = m.Client.GetPublicChannelsForTeam(teamID, idx, max, "")
-			if err == nil {
-				idx++
-
-				break
-			}
-
-			if err := m.HandleRatelimit("GetPublicChannelsForTeam", resp); err != nil {
-				return err
-			}
-		}
-	}
+	m.Lock()
+	defer m.Unlock()
 
 	for idx, t := range m.OtherTeams {
 		if t.ID == teamID {
-			m.Lock()
+			m.OtherTeams[idx].Channels = mmchannels
 			m.OtherTeams[idx].MoreChannels = moreChannels
-			m.Unlock()
+			break
 		}
 	}
 
@@ -276,6 +260,11 @@ func (m *Client) UpdateChannelsTeam(teamID string) error {
 }
 
 func (m *Client) UpdateChannels() error {
+	if m.Team == nil {
+		m.logger.Errorf("cannot update channels: primary team is nil")
+		return errors.New("cannot update channels: primary team is nil")
+	}
+
 	if err := m.UpdateChannelsTeam(m.Team.ID); err != nil {
 		return err
 	}
@@ -306,6 +295,9 @@ func (m *Client) UpdateChannelHeader(channelID string, header string) {
 
 func (m *Client) UpdateLastViewed(channelID string) error {
 	m.logger.Debugf("posting lastview %#v", channelID)
+	if channelID != "pkn6xmxn37rix85w4uurjpkoqo" {
+		m.logger.Debugf("posting lastview %#v", channelID)
+	}
 
 	view := &model.ChannelView{ChannelId: channelID}
 
