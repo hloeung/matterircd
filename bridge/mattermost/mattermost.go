@@ -324,13 +324,23 @@ func (m *Mattermost) MsgChannel(channelID, text string) (string, error) {
 }
 
 func (m *Mattermost) MsgChannelThread(channelID, parentID, text string) (string, error) {
-	props := make(map[string]interface{})
-	props["matterircd_"+m.mc.User.Id] = m.instanceTag
+	props := map[string]interface{}{
+		"matterircd_" + m.mc.User.Id: m.instanceTag,
+	}
+
+	msgType := ""
+	// CTCP ACTION (/me)
+	if strings.HasPrefix(text, "\x01ACTION ") {
+		text = strings.TrimPrefix(text, "\x01ACTION ")
+		text = strings.TrimSuffix(text, "\x01")
+		msgType = "me"
+	}
 
 	post := &model.Post{
 		ChannelId: channelID,
 		Message:   text,
 		RootId:    parentID,
+		Type:      msgType,
 	}
 
 	post.SetProps(props)
@@ -354,6 +364,7 @@ func (m *Mattermost) MsgChannelThread(channelID, parentID, text string) (string,
 		ChannelId: channelID,
 		Message:   text,
 		RootId:    replyPost.RootId,
+		Type:      msgType,
 	}
 
 	post.SetProps(props)
@@ -839,6 +850,8 @@ func maybeShorten(msg string, newLen int, uncounted string, unicode bool) string
 		b.WriteString(word)
 	}
 
+	// We also want to reset any formatting which can be carried over from shortening
+	b.WriteByte('\x0f')
 	b.WriteByte(' ')
 	b.WriteString(ellipsis)
 
@@ -997,7 +1010,7 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 			}
 
 			d := &bridge.DirectMessageEvent{
-				Text:      "\x01ACTION updated topic to: " + topic + " \x01",
+				Text:      "\x01ACTION updated topic to: " + topic + "\x01",
 				ChannelID: data.ChannelId,
 				MessageID: data.Id,
 				Event:     "dm_topic",
@@ -1067,7 +1080,7 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 
 	switch {
 	case data.Type == "me":
-		msg = "\x01ACTION " + strings.Trim(msg, "*") + " \x01"
+		msg = "\x01ACTION " + msg + postfix + "\x01"
 	case data.Type == "slack_attachment":
 		useFallback := msg == ""
 		// https://docs.slack.dev/tools/node-slack-sdk/reference/web-api/interfaces/MessageAttachment/
@@ -1094,7 +1107,7 @@ func (m *Mattermost) handleWsActionPost(rmsg *model.WebSocketEvent) {
 	if strings.HasSuffix(msg, "\n") { //nolint:gosimple
 		msg = msg[:len(msg)-1]
 	}
-	if postfix != "" {
+	if postfix != "" && data.Type != "me" {
 		msg += postfix
 	}
 
