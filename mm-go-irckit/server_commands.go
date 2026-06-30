@@ -368,12 +368,6 @@ func CmdPrivMsg(s Server, u *User, msg *irc.Message) error {
 			msg.Trailing = msg.Params[1]
 		}
 	}
-	// CTCP ACTION (/me)
-	if strings.HasPrefix(msg.Trailing, "\x01ACTION ") {
-		msg.Trailing = strings.ReplaceAll(msg.Trailing, "\x01ACTION ", "")
-		msg.Trailing = strings.ReplaceAll(msg.Trailing, "\x01", "")
-		msg.Trailing = "*" + msg.Trailing + "*"
-	}
 
 	// strip IRC colors
 	msg.Trailing = colorRegExp.ReplaceAllString(msg.Trailing, "")

@@ -45,6 +45,7 @@ func New(v *viper.Viper, cred bridge.Credentials, eventChan chan *bridge.Event, 
 	ourlog := logrus.New()
 	ourlog.SetFormatter(&prefixed.TextFormatter{
 		PrefixPadding: 13,
+		DisableColors: false,
 		FullTimestamp: true,
 	})
 	logger = ourlog.WithFields(logrus.Fields{"prefix": "bridge/slack"})
@@ -174,6 +175,13 @@ func (s *Slack) MsgUser(username, text string) (string, error) {
 		return "", err
 	}
 
+	// CTCP ACTION (/me)
+	if strings.HasPrefix(text, "\x01ACTION ") {
+		text = strings.TrimPrefix(text, "\x01ACTION ")
+		text = strings.TrimSuffix(text, "\x01")
+		text = "*" + text + "*"
+	}
+
 	opts := s.createSlackMsgOption(text)
 
 	_, msgID, err := s.sc.PostMessage(dchannel.ID, opts...)
@@ -189,6 +197,13 @@ func (s *Slack) MsgUser(username, text string) (string, error) {
 }
 
 func (s *Slack) MsgChannel(channelID, text string) (string, error) {
+	// CTCP ACTION (/me)
+	if strings.HasPrefix(text, "\x01ACTION ") {
+		text = strings.TrimPrefix(text, "\x01ACTION ")
+		text = strings.TrimSuffix(text, "\x01")
+		text = "*" + text + "*"
+	}
+
 	opts := s.createSlackMsgOption(text)
 
 	_, msgID, err := s.sc.PostMessage(strings.ToUpper(channelID), opts...)
