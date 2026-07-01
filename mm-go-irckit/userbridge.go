@@ -131,9 +131,41 @@ const (
 	blockQuoteCharDefault     = ">"
 	blockQuoteCharNonUnicode  = "|"
 	blockQuoteCharUnicode     = "🮇"
+	codeBlockCharDefault      = ""
 	codeBlockPrefixNonUnicode = "|"
 	codeBlockPrefixUnicode    = "🮇"
 )
+
+func (u *User) getMarkdownBlockCodePrefix() (string, string) {
+	disableMarkdown := u.v.GetBool(u.br.Protocol() + ".disablemarkdown")
+	enableUnicode := u.v.GetBool(u.br.Protocol() + ".unicode")
+
+	// Block quotes
+	var blockQuoteChar string
+	if u.v.GetBool(u.br.Protocol() + ".disablemarkdownblockquote") || disableMarkdown {
+		blockQuoteChar = blockQuoteCharDefault
+	} else if custom := u.v.GetString(u.br.Protocol() + ".markdownblockquotechar"); custom != "" {
+		blockQuoteChar = custom
+	} else if enableUnicode {
+		blockQuoteChar = blockQuoteCharUnicode
+	} else {
+		blockQuoteChar = blockQuoteCharNonUnicode
+	}
+
+	// Code blocks
+	var codeBlockPrefix string
+	if u.v.GetBool(u.br.Protocol() + ".disablecodeblockprefix") || disableMarkdown {
+		codeBlockPrefix = codeBlockCharDefault
+	} else if custom := u.v.GetString(u.br.Protocol() + ".codeblockprefix"); custom != "" {
+		codeBlockPrefix = custom
+	} else if enableUnicode {
+		codeBlockPrefix = codeBlockPrefixUnicode
+	} else {
+		codeBlockPrefix = codeBlockPrefixNonUnicode
+	}
+
+	return blockQuoteChar, codeBlockPrefix
+}
 
 func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 	if u.v.GetBool(u.br.Protocol() + ".showmentions") {
@@ -155,12 +187,8 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 	var showContext bool
 	var maxlen int
 
-	blockQuoteChar := blockQuoteCharNonUnicode
-	if !u.v.GetBool(u.br.Protocol() + ".disablemarkdownblockquote") {
-		blockQuoteChar = u.v.GetString(u.br.Protocol() + ".markdownblockquotechar")
-	} else if u.v.GetBool(u.br.Protocol() + ".unicode") {
-		blockQuoteChar = blockQuoteCharUnicode
-	}
+	disableMarkdown := u.v.GetBool(u.br.Protocol() + ".disablemarkdown")
+	blockQuoteChar, codeBlockPrefix := u.getMarkdownBlockCodePrefix()
 
 	text := event.Text
 	prefix := ""
@@ -174,15 +202,15 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 			prefixUser = event.Receiver.User
 		}
 		// Block quotes
-		if !u.v.GetBool(u.br.Protocol()+".disablemarkdown") && strings.HasPrefix(text, blockQuoteCharDefault) {
-			text = blockQuoteChar + text[1:]
+		trimmedText := strings.TrimLeft(text, " \t")
+		if !disableMarkdown && strings.HasPrefix(trimmedText, blockQuoteCharDefault) && blockQuoteChar != blockQuoteCharDefault {
+			text = strings.Replace(text, blockQuoteCharDefault, blockQuoteChar, 1)
 		}
 		text, prefix, suffix, showContext, maxlen = u.handleMessageThreadContext(prefixUser, event.MessageID, event.ParentID, event.Event, text)
 	}
 	trimmedPrefix := strings.TrimSpace(prefix)
 	trimmedSuffix := strings.TrimSpace(suffix)
 
-	disableMarkdown := u.v.GetBool(u.br.Protocol() + ".disablemarkdown")
 	disableEmoji := u.v.GetBool(u.br.Protocol() + ".disableemoji")
 	prefixContext := u.v.GetBool(u.br.Protocol() + ".prefixcontext")
 	showContextMulti := u.v.GetBool(u.br.Protocol() + ".showcontextmulti")
@@ -191,12 +219,6 @@ func (u *User) handleDirectMessageEvent(event *bridge.DirectMessageEvent) {
 	lexer := ""
 	codeBlockBackTick := false
 	codeBlockTilde := false
-	codeBlockPrefix := codeBlockPrefixNonUnicode
-	if !u.v.GetBool(u.br.Protocol() + ".disablecodeblockprefix") {
-		codeBlockPrefix = u.v.GetString(u.br.Protocol() + ".codeblockprefix")
-	} else if u.v.GetBool(u.br.Protocol() + ".unicode") {
-		codeBlockPrefix = codeBlockPrefixUnicode
-	}
 	text = wordwrap.String(text, maxlen)
 	lines := strings.Split(text, "\n")
 	addPrefix := false
@@ -359,12 +381,8 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 		}
 	}
 
-	blockQuoteChar := blockQuoteCharNonUnicode
-	if !u.v.GetBool(u.br.Protocol() + ".disablemarkdownblockquote") {
-		blockQuoteChar = u.v.GetString(u.br.Protocol() + ".markdownblockquotechar")
-	} else if u.v.GetBool(u.br.Protocol() + ".unicode") {
-		blockQuoteChar = blockQuoteCharUnicode
-	}
+	disableMarkdown := u.v.GetBool(u.br.Protocol() + ".disablemarkdown")
+	blockQuoteChar, codeBlockPrefix := u.getMarkdownBlockCodePrefix()
 
 	text := event.Text
 	prefix := ""
@@ -373,8 +391,9 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 	maxlen := 440
 	if u.Nick != systemUser {
 		// Block quotes
-		if !u.v.GetBool(u.br.Protocol()+".disablemarkdown") && strings.HasPrefix(text, blockQuoteCharDefault) {
-			text = blockQuoteChar + text[1:]
+		trimmedText := strings.TrimLeft(text, " \t")
+		if !disableMarkdown && strings.HasPrefix(trimmedText, blockQuoteCharDefault) && blockQuoteChar != blockQuoteCharDefault {
+			text = strings.Replace(text, blockQuoteCharDefault, blockQuoteChar, 1)
 		}
 		text, prefix, suffix, showContext, maxlen = u.handleMessageThreadContext(event.ChannelID, event.MessageID, event.ParentID, event.Event, text)
 	} else {
@@ -383,7 +402,6 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 	trimmedPrefix := strings.TrimSpace(prefix)
 	trimmedSuffix := strings.TrimSpace(suffix)
 
-	disableMarkdown := u.v.GetBool(u.br.Protocol() + ".disablemarkdown")
 	disableEmoji := u.v.GetBool(u.br.Protocol() + ".disableemoji")
 	prefixContext := u.v.GetBool(u.br.Protocol() + ".prefixcontext")
 	showContextMulti := u.v.GetBool(u.br.Protocol() + ".showcontextmulti")
@@ -392,12 +410,6 @@ func (u *User) handleChannelMessageEvent(event *bridge.ChannelMessageEvent) {
 	lexer := ""
 	codeBlockBackTick := false
 	codeBlockTilde := false
-	codeBlockPrefix := codeBlockPrefixNonUnicode
-	if !u.v.GetBool(u.br.Protocol() + ".disablecodeblockprefix") {
-		codeBlockPrefix = u.v.GetString(u.br.Protocol() + ".codeblockprefix")
-	} else if u.v.GetBool(u.br.Protocol() + ".unicode") {
-		codeBlockPrefix = codeBlockPrefixUnicode
-	}
 	text = wordwrap.String(text, maxlen)
 	lines := strings.Split(text, "\n")
 	addPrefix := false
