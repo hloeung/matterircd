@@ -142,7 +142,7 @@ func (u *User) getMarkdownBlockCodePrefix() (string, string) {
 
 	// Block quotes
 	var blockQuoteChar string
-	if u.v.GetBool(u.br.Protocol() + ".disablemarkdownblockquote") || disableMarkdown {
+	if u.v.GetBool(u.br.Protocol()+".disablemarkdownblockquote") || disableMarkdown {
 		blockQuoteChar = blockQuoteCharDefault
 	} else if custom := u.v.GetString(u.br.Protocol() + ".markdownblockquotechar"); custom != "" {
 		blockQuoteChar = custom
@@ -154,7 +154,7 @@ func (u *User) getMarkdownBlockCodePrefix() (string, string) {
 
 	// Code blocks
 	var codeBlockPrefix string
-	if u.v.GetBool(u.br.Protocol() + ".disablecodeblockprefix") || disableMarkdown {
+	if u.v.GetBool(u.br.Protocol()+".disablecodeblockprefix") || disableMarkdown {
 		codeBlockPrefix = codeBlockCharDefault
 	} else if custom := u.v.GetString(u.br.Protocol() + ".codeblockprefix"); custom != "" {
 		codeBlockPrefix = custom
