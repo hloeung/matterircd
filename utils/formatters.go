@@ -158,8 +158,9 @@ func Markdown2irc(msg string, blockQuoteChar string) string {
 	}
 
 	// Block quotes
-	if strings.HasPrefix(msg, blockQuoteCharDefault) && blockQuoteChar != ">" {
-		msg = blockQuoteChar + msg[1:]
+	trimmedText := strings.TrimLeft(msg, " \t")
+	if strings.HasPrefix(trimmedText, blockQuoteCharDefault) && blockQuoteChar != blockQuoteCharDefault {
+		msg = strings.Replace(msg, blockQuoteCharDefault, blockQuoteChar, 1)
 	}
 
 	return msg
