@@ -221,20 +221,100 @@ func (s *Slack) SetTopic(ctx context.Context, channelID, text string) error {
 	return s.sc.SetTopic(channelID, text)
 }
 
+const (
+	statusOnline = "online"
+	statusAway   = "away"
+)
+
 func (s *Slack) HasCustomStatus(userID string) bool {
-	return false
+	return s.sc.GetUserCustomStatus(userID) != ""
 }
 
 func (s *Slack) IsOnline(status string) bool {
-	return status == "active"
+	if status == statusOnline || status == "active" {
+		return true
+	}
+
+	return (strings.HasPrefix(status, statusOnline+" (") || strings.HasPrefix(status, "active (")) && !strings.Contains(status, "): ")
 }
 
-func (s *Slack) StatusUser(ctx context.Context, name string) (string, error) {
-	return "", nil
+func normalizeSlackPresence(presence string) string {
+	switch presence {
+	case "active":
+		return statusOnline
+	case statusAway:
+		return statusAway
+	default:
+		return presence
+	}
+}
+
+func formatSlackUserStatus(prefix, localTime, custom string, lastActivity int64) string {
+	var lastOnline string
+
+	if lastActivity > 0 {
+		diff := max(0, time.Now().Unix()-lastActivity)
+		if prefix == statusOnline {
+			lastOnline = utils.FormatLastOnline(lastActivity, true)
+		} else if diff >= 20*60 {
+			lastOnline = utils.FormatLastOnline(lastActivity)
+		}
+	}
+
+	var details string
+
+	switch {
+	case lastOnline != "" && localTime != "":
+		details = lastOnline + ", local time: " + localTime
+	case lastOnline != "":
+		details = lastOnline
+	case localTime != "":
+		details = "local time: " + localTime
+	}
+
+	status := prefix
+	if details != "" {
+		status += " (" + details + ")"
+	}
+
+	if custom != "" {
+		status += ": " + custom
+	}
+
+	return status
+}
+
+func (s *Slack) StatusUser(ctx context.Context, userID string) (string, error) {
+	if userID == "" {
+		return "", nil
+	}
+
+	up, err := s.sc.GetUserPresence(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+
+	if up == nil {
+		return "", nil
+	}
+
+	prefix := normalizeSlackPresence(up.Presence)
+	if prefix == "" {
+		if up.Online {
+			prefix = statusOnline
+		} else {
+			prefix = statusAway
+		}
+	}
+
+	localTime := s.sc.GetUserLocalTime(userID)
+	custom := s.sc.GetUserCustomStatus(userID)
+
+	return formatSlackUserStatus(prefix, localTime, custom, int64(up.LastActivity)), nil
 }
 
 func (s *Slack) StatusUsers(ctx context.Context) (map[string]string, error) {
-	return make(map[string]string), nil
+	return s.sc.GetStatuses(), nil
 }
 
 func (s *Slack) Protocol() string {
@@ -869,62 +949,96 @@ func (s *Slack) loginToSlack() (*slackclient.Client, error) {
 	return s.sc, nil
 }
 
-//nolint:gocyclo
 func (s *Slack) handleSlack(ctx context.Context) {
 	for msg := range s.sc.IncomingEvents() {
 		logger.Tracef("handleSlack %s", spew.Sdump(msg))
+		s.handleSlackEvent(ctx, msg)
+	}
+}
 
-		switch ev := msg.Data.(type) {
-		case *slack.MessageEvent:
-			switch ev.SubType {
-			case "group_join", "channel_join", "group_leave", "channel_leave":
-			default:
-				s.handleSlackActionPost(ctx, ev)
-			}
-		case *slack.MemberLeftChannelEvent:
-			s.handleMemberLeftChannel(ctx, ev)
-		case *slack.MemberJoinedChannelEvent:
-			s.handleMemberJoinedChannel(ctx, ev)
-		case *slack.DisconnectedEvent:
-			logger.Debug("disconnected event received, we should reconnect now..")
-		case *slack.ReactionAddedEvent:
-			logger.Debugf("ReactionAdded msg %#v", ev)
-			s.handleSlackReaction(ctx, ev.User, ev.Item.Channel, ev.Item.Timestamp, ev.Reaction, true)
-		case *slack.ReactionRemovedEvent:
-			logger.Debugf("ReactionRemoved msg %#v", ev)
-			s.handleSlackReaction(ctx, ev.User, ev.Item.Channel, ev.Item.Timestamp, ev.Reaction, false)
-		case *slack.StarAddedEvent:
-			logger.Debugf("StarAdded msg %#v", ev)
+func (s *Slack) handleSlackEvent(ctx context.Context, msg slack.RTMEvent) {
+	switch ev := msg.Data.(type) {
+	case *slack.MessageEvent:
+		switch ev.SubType {
+		case "group_join", "channel_join", "group_leave", "channel_leave":
+		default:
+			s.handleSlackActionPost(ctx, ev)
+		}
+	case *slack.MemberLeftChannelEvent:
+		s.handleMemberLeftChannel(ctx, ev)
+	case *slack.MemberJoinedChannelEvent:
+		s.handleMemberJoinedChannel(ctx, ev)
+	case *slack.DisconnectedEvent:
+		logger.Debug("disconnected event received, we should reconnect now..")
+	case *slack.ReactionAddedEvent:
+		logger.Debugf("ReactionAdded msg %#v", ev)
+		s.handleSlackReaction(ctx, ev.User, ev.Item.Channel, ev.Item.Timestamp, ev.Reaction, true)
+	case *slack.ReactionRemovedEvent:
+		logger.Debugf("ReactionRemoved msg %#v", ev)
+		s.handleSlackReaction(ctx, ev.User, ev.Item.Channel, ev.Item.Timestamp, ev.Reaction, false)
+	case *slack.PresenceChangeEvent:
+		s.handlePresenceChange(ev.User, ev.Users, ev.Presence)
+	case *slack.ManualPresenceChangeEvent:
+		s.handlePresenceChange(s.sc.UserID(), nil, ev.Presence)
+	case *slack.UserChangeEvent:
+		s.sc.UpdateUser(ev.User)
+	case *slack.UserStatusChangedEvent:
+		s.sc.UpdateUser(ev.User)
+	default:
+		s.handleSlackItemEvent(ctx, msg.Data)
+	}
+}
 
-			if ev.Item.Message == nil {
-				continue
-			}
+func (s *Slack) handleSlackItemEvent(ctx context.Context, data any) {
+	switch ev := data.(type) {
+	case *slack.StarAddedEvent:
+		logger.Debugf("StarAdded msg %#v", ev)
 
+		if ev.Item.Message != nil {
 			s.handleItemMisc(ctx, ev.User, ev.Item.Channel, ev.Item.Message, "Message starred")
-		case *slack.StarRemovedEvent:
-			logger.Debugf("StarRemoved msg %#v", ev)
+		}
+	case *slack.StarRemovedEvent:
+		logger.Debugf("StarRemoved msg %#v", ev)
 
-			if ev.Item.Message == nil {
-				continue
-			}
-
+		if ev.Item.Message != nil {
 			s.handleItemMisc(ctx, ev.User, ev.Item.Channel, ev.Item.Message, "Message unstarred")
-		case *slack.PinAddedEvent:
-			logger.Debugf("PinAdded msg %#v", ev)
+		}
+	case *slack.PinAddedEvent:
+		logger.Debugf("PinAdded msg %#v", ev)
 
-			if ev.Item.Message == nil {
-				continue
-			}
-
+		if ev.Item.Message != nil {
 			s.handleItemPin(ctx, ev.User, ev.Item.Channel, ev.Item.Message, subTypePinAdded)
-		case *slack.PinRemovedEvent:
-			logger.Debugf("PinRemoved msg %#v", ev)
+		}
+	case *slack.PinRemovedEvent:
+		logger.Debugf("PinRemoved msg %#v", ev)
 
-			if ev.Item.Message == nil {
-				continue
-			}
-
+		if ev.Item.Message != nil {
 			s.handleItemPin(ctx, ev.User, ev.Item.Channel, ev.Item.Message, subTypePinRemoved)
+		}
+	}
+}
+
+func (s *Slack) handlePresenceChange(user string, users []string, presence string) {
+	targets := users
+	if len(targets) == 0 && user != "" {
+		targets = []string{user}
+	}
+
+	normalized := normalizeSlackPresence(presence)
+
+	for _, uid := range targets {
+		if uid == "" {
+			continue
+		}
+
+		s.sc.UpdatePresence(uid, presence)
+
+		s.eventChan <- &bridge.Event{
+			Type: "status_change",
+			Data: &bridge.StatusChangeEvent{
+				UserID: uid,
+				Status: normalized,
+			},
 		}
 	}
 }
@@ -1548,6 +1662,41 @@ func (s *Slack) resolveSlackNick(slackuser *slack.User, rc *config.RuntimeConfig
 	return nick
 }
 
+func buildSlackUserInfo(slackuser *slack.User, nick, teamID string, me bool) *bridge.UserInfo {
+	roles := ""
+	if slackuser.IsBot || slackuser.IsAppUser || slackuser.IsWorkflowBot {
+		roles = "bot"
+	}
+
+	photo := firstNonEmpty(
+		slackuser.Profile.ImageOriginal,
+		slackuser.Profile.Image512,
+		slackuser.Profile.Image192,
+		slackuser.Profile.Image72,
+		slackuser.Profile.Image48,
+		slackuser.Profile.Image32,
+		slackuser.Profile.Image24,
+	)
+
+	return &bridge.UserInfo{
+		Nick:        nick,
+		User:        slackuser.ID,
+		Real:        slackuser.RealName,
+		Host:        "host",
+		Roles:       roles,
+		DisplayName: slackuser.Profile.DisplayName,
+		Ghost:       true,
+		Me:          me,
+		Username:    slackuser.Profile.RealName,
+		FirstName:   slackuser.Profile.FirstName,
+		LastName:    slackuser.Profile.LastName,
+		Email:       slackuser.Profile.Email,
+		Position:    slackuser.Profile.Title,
+		Photo:       photo,
+		TeamID:      teamID,
+	}
+}
+
 func (s *Slack) createUser(slackuser *slack.User) *bridge.UserInfo {
 	if slackuser == nil {
 		return &bridge.UserInfo{}
@@ -1555,25 +1704,9 @@ func (s *Slack) createUser(slackuser *slack.User) *bridge.UserInfo {
 
 	rc := s.cfg.Current()
 	nick := s.resolveSlackNick(slackuser, rc)
-
 	me := slackuser.ID == s.sc.UserID()
 
-	info := &bridge.UserInfo{
-		Nick:        nick,
-		User:        slackuser.ID,
-		Real:        slackuser.RealName,
-		Host:        "host",
-		Roles:       "",
-		DisplayName: slackuser.Profile.DisplayName,
-		Ghost:       true,
-		Me:          me,
-		Username:    slackuser.Profile.RealName,
-		FirstName:   slackuser.Profile.FirstName,
-		LastName:    slackuser.Profile.LastName,
-		TeamID:      s.sc.TeamID(),
-	}
-
-	return info
+	return buildSlackUserInfo(slackuser, nick, s.sc.TeamID(), me)
 }
 
 func (s *Slack) Connected() bool {
