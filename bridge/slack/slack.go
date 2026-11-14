@@ -479,29 +479,7 @@ func (s *Slack) GetUserChannels(ctx context.Context, userID string) ([]string, e
 		return names, nil
 	}
 
-	convs, err := s.sc.GetConversations()
-	if err != nil {
-		return nil, err
-	}
-
-	var names []string
-
-	for _, ch := range convs {
-		if !isPublicSlackChannel(ch) {
-			continue
-		}
-
-		members, err := s.sc.GetUsersInConversation(ch.ID)
-		if err != nil {
-			continue
-		}
-
-		if slices.Contains(members, userID) {
-			names = append(names, ch.Name)
-		}
-	}
-
-	return names, nil
+	return s.sc.GetUserChannels(ctx, userID)
 }
 
 func (s *Slack) GetUserCount() int {
@@ -1177,6 +1155,7 @@ func (s *Slack) emitChannelCreate(channelID, name string) {
 	}
 
 	s.sc.UpdateChannel(channelID, name)
+	s.sc.InvalidateUserChannels("")
 
 	chName := ""
 	if name != "" {
@@ -1198,6 +1177,7 @@ func (s *Slack) emitChannelDelete(channelID string) {
 	}
 
 	s.sc.RemoveChannel(channelID)
+	s.sc.InvalidateUserChannels("")
 
 	s.eventChan <- &bridge.Event{
 		Type: "channel_delete",
@@ -1429,6 +1409,8 @@ func (s *Slack) handleActionMisc(userID, channelID, msgID, parentID, msg, eventT
 }
 
 func (s *Slack) handleMemberLeftChannel(ctx context.Context, rmsg *slack.MemberLeftChannelEvent) {
+	s.sc.InvalidateUserChannels(rmsg.User)
+
 	event := &bridge.Event{
 		Type: "channel_remove",
 		Data: &bridge.ChannelRemoveEvent{
@@ -1443,6 +1425,8 @@ func (s *Slack) handleMemberLeftChannel(ctx context.Context, rmsg *slack.MemberL
 }
 
 func (s *Slack) handleMemberJoinedChannel(ctx context.Context, rmsg *slack.MemberJoinedChannelEvent) {
+	s.sc.InvalidateUserChannels(rmsg.User)
+
 	var adder *bridge.UserInfo
 
 	if rmsg.Inviter != "" {

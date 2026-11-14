@@ -33,19 +33,25 @@ type presenceEntry struct {
 	verifiedAt int64
 }
 
+type userChannelsEntry struct {
+	channels  []string
+	fetchedAt int64
+}
+
 type Client struct {
 	sync.RWMutex
 
-	cred       Credentials
-	sc         *slack.Client
-	rtm        *slack.RTM
-	info       *slack.Info
-	users      map[string]slack.User
-	presences  map[string]presenceEntry
-	channels   map[string]string
-	dmChannels map[string]string
-	msgLast    map[string]string
-	connected  bool
+	cred         Credentials
+	sc           *slack.Client
+	rtm          *slack.RTM
+	info         *slack.Info
+	users        map[string]slack.User
+	presences    map[string]presenceEntry
+	channels     map[string]string
+	userChannels map[string]userChannelsEntry
+	dmChannels   map[string]string
+	msgLast      map[string]string
+	connected    bool
 
 	logger        *logrus.Entry
 	rootLogger    *logrus.Logger
@@ -76,6 +82,7 @@ func New(cred Credentials) *Client {
 		users:         make(map[string]slack.User),
 		presences:     make(map[string]presenceEntry),
 		channels:      make(map[string]string),
+		userChannels:  make(map[string]userChannelsEntry),
 		dmChannels:    make(map[string]string),
 		msgLast:       make(map[string]string),
 		rootLogger:    rootLogger,
@@ -127,6 +134,7 @@ func (c *Client) Login() error {
 	c.users = make(map[string]slack.User)
 	c.presences = make(map[string]presenceEntry)
 	c.channels = make(map[string]string)
+	c.userChannels = make(map[string]userChannelsEntry)
 
 	go c.rtm.ManageConnection()
 
