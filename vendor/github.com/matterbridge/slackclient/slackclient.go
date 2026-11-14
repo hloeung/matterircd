@@ -26,6 +26,12 @@ type Credentials struct {
 	Token string
 }
 
+type presenceEntry struct {
+	presence   slack.UserPresence
+	fetchedAt  int64
+	verifiedAt int64
+}
+
 type Client struct {
 	sync.RWMutex
 
@@ -34,6 +40,7 @@ type Client struct {
 	rtm        *slack.RTM
 	info       *slack.Info
 	users      map[string]slack.User
+	presences  map[string]presenceEntry
 	channels   map[string]string
 	dmChannels map[string]string
 	msgLast    map[string]string
@@ -66,6 +73,7 @@ func New(cred Credentials) *Client {
 	return &Client{
 		cred:          cred,
 		users:         make(map[string]slack.User),
+		presences:     make(map[string]presenceEntry),
 		channels:      make(map[string]string),
 		dmChannels:    make(map[string]string),
 		msgLast:       make(map[string]string),
@@ -116,6 +124,7 @@ func (c *Client) Login() error {
 	c.sc = slack.New(token, opts...)
 	c.rtm = c.sc.NewRTM(rtmOpts...)
 	c.users = make(map[string]slack.User)
+	c.presences = make(map[string]presenceEntry)
 	c.channels = make(map[string]string)
 
 	go c.rtm.ManageConnection()

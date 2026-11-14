@@ -388,6 +388,11 @@ func (m *Matrix) OnTyping(t *matrixclient.Typing) {
 	m.enqueueEvent(t)
 }
 
+// OnPresence implements matrixclient.PresenceHandler.
+func (m *Matrix) OnPresence(p *matrixclient.PresenceChange) {
+	m.enqueueEvent(p)
+}
+
 func (m *Matrix) handleTyping(t *matrixclient.Typing) {
 	channelType := ""
 	if t.Direct {

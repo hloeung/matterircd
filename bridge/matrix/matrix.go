@@ -464,6 +464,8 @@ func (m *Matrix) handleEvent(q *queuedEvent) {
 		m.handlePin(e, q.direct, q.peer)
 	case *matrixclient.Typing:
 		m.handleTyping(e)
+	case *matrixclient.PresenceChange:
+		m.handlePresenceChange(e)
 	case *matrixclient.TopicChange:
 		m.handleTopic(e, q.direct, q.peer)
 	case *matrixclient.MemberChange:
@@ -1132,6 +1134,25 @@ func (m *Matrix) StatusUsers(ctx context.Context) (map[string]string, error) {
 	}
 
 	return statuses, nil
+}
+
+func (m *Matrix) handlePresenceChange(p *matrixclient.PresenceChange) {
+	if p == nil || p.UserID == "" {
+		return
+	}
+
+	ident := m.cachedUserIdent(p.UserID)
+	if ident == "" {
+		return
+	}
+
+	m.sendEvent(&bridge.Event{
+		Type: "status_change",
+		Data: &bridge.StatusChangeEvent{
+			UserID: ident,
+			Status: p.Status,
+		},
+	})
 }
 
 func (m *Matrix) cachedUserIdent(userID id.UserID) string {

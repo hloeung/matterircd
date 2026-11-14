@@ -1,10 +1,20 @@
 package slackclient
 
 import (
+	"context"
+	"errors"
 	"strings"
+	"time"
 
 	"github.com/slack-go/slack"
 )
+
+const (
+	presenceActive = "active"
+	presenceAway   = "away"
+)
+
+var errNoPresence = errors.New("slackclient: presence unavailable")
 
 func (c *Client) InitUsers() {
 	users, _ := c.sc.GetUsers()
@@ -19,6 +29,15 @@ func (c *Client) InitUsers() {
 		}
 
 		c.users[mmuser.ID] = mmuser
+
+		if mmuser.Presence != "" {
+			c.presences[mmuser.ID] = presenceEntry{
+				presence: slack.UserPresence{
+					Presence: mmuser.Presence,
+					Online:   mmuser.Presence == presenceActive,
+				},
+			}
+		}
 	}
 }
 
@@ -140,8 +159,8 @@ func (c *Client) SetStatus(status string) error {
 	switch status {
 	case "online":
 		return c.sc.SetUserPresence("auto")
-	case "away":
-		return c.sc.SetUserPresence("away")
+	case presenceAway:
+		return c.sc.SetUserPresence(presenceAway)
 	}
 
 	return nil
@@ -195,4 +214,207 @@ func (c *Client) SearchUsers(query string) []slack.User {
 	}
 
 	return matches
+}
+
+const (
+	presenceCacheTTL = 30 * time.Second
+	presenceStaleTTL = 5 * time.Minute
+)
+
+func (c *Client) UpdateUser(user slack.User) {
+	if user.ID == "" {
+		return
+	}
+
+	c.Lock()
+	c.users[user.ID] = user
+	c.Unlock()
+}
+
+func (c *Client) UpdatePresence(userID, presence string) {
+	if userID == "" {
+		return
+	}
+
+	now := time.Now().Unix()
+
+	c.Lock()
+	entry := c.presences[userID]
+	entry.presence.Presence = presence
+	entry.presence.Online = presence == presenceActive
+	entry.verifiedAt = now
+
+	if presence == presenceActive {
+		entry.presence.LastActivity = slack.JSONTime(now)
+	}
+
+	c.presences[userID] = entry
+	c.Unlock()
+}
+
+func staleFilteredPresence(entry presenceEntry, now int64) *slack.UserPresence {
+	p := entry.presence
+	if p.Presence != presenceActive && p.LastActivity > 0 {
+		if entry.verifiedAt == 0 || now-entry.verifiedAt > int64(presenceStaleTTL.Seconds()) {
+			p.LastActivity = 0
+		}
+	}
+
+	return &p
+}
+
+func (c *Client) GetUserPresence(ctx context.Context, userID string) (*slack.UserPresence, error) {
+	if userID == "" {
+		return nil, errNoPresence
+	}
+
+	now := time.Now().Unix()
+
+	c.RLock()
+	entry, ok := c.presences[userID]
+	c.RUnlock()
+
+	if ok && entry.fetchedAt > 0 && now-entry.fetchedAt < int64(presenceCacheTTL.Seconds()) {
+		p := entry.presence
+		return &p, nil
+	}
+
+	if c.sc == nil {
+		if ok {
+			return staleFilteredPresence(entry, now), nil
+		}
+
+		return nil, errNoPresence
+	}
+
+	up, err := c.sc.GetUserPresenceContext(ctx, userID)
+	if err != nil {
+		if ok {
+			return staleFilteredPresence(entry, now), nil
+		}
+
+		return nil, err
+	}
+
+	if up != nil {
+		now = time.Now().Unix()
+
+		c.Lock()
+		c.presences[userID] = presenceEntry{
+			presence:   *up,
+			fetchedAt:  now,
+			verifiedAt: now,
+		}
+		c.Unlock()
+	}
+
+	return up, nil
+}
+
+func formatCustomStatus(profile slack.UserProfile) string {
+	if profile.StatusExpiration > 0 && time.Now().Unix() >= int64(profile.StatusExpiration) {
+		return ""
+	}
+
+	emoji := strings.TrimSpace(profile.StatusEmoji)
+	text := strings.TrimSpace(profile.StatusText)
+
+	switch {
+	case emoji != "" && text != "":
+		return emoji + " " + text
+	case emoji != "":
+		return emoji
+	case text != "":
+		return text
+	default:
+		return ""
+	}
+}
+
+func (c *Client) GetUserCustomStatus(userID string) string {
+	if userID == "" {
+		return ""
+	}
+
+	c.RLock()
+	user, ok := c.users[userID]
+	c.RUnlock()
+
+	if !ok {
+		if fetched := c.GetUser(userID); fetched != nil {
+			user = *fetched
+			ok = true
+		}
+	}
+
+	if !ok {
+		return ""
+	}
+
+	return formatCustomStatus(user.Profile)
+}
+
+func (c *Client) GetUserLocalTime(userID string) string {
+	if userID == "" {
+		return ""
+	}
+
+	user := c.GetUser(userID)
+	if user == nil {
+		return ""
+	}
+
+	if user.TZ != "" {
+		loc, err := time.LoadLocation(user.TZ)
+		if err == nil {
+			return time.Now().In(loc).Format("15:04")
+		}
+	}
+
+	if user.TZOffset != 0 || user.TZLabel != "" {
+		loc := time.FixedZone(user.TZLabel, user.TZOffset)
+		return time.Now().In(loc).Format("15:04")
+	}
+
+	return ""
+}
+
+func normalizePresence(presence string) string {
+	switch presence {
+	case presenceActive:
+		return "online"
+	case presenceAway:
+		return presenceAway
+	default:
+		return presence
+	}
+}
+
+func (c *Client) GetStatuses() map[string]string {
+	c.RLock()
+	defer c.RUnlock()
+
+	statuses := make(map[string]string, len(c.users))
+
+	for id, u := range c.users {
+		prefix := ""
+		if entry, ok := c.presences[id]; ok {
+			prefix = normalizePresence(entry.presence.Presence)
+		} else if u.Presence != "" {
+			prefix = normalizePresence(u.Presence)
+		}
+
+		custom := formatCustomStatus(u.Profile)
+
+		switch {
+		case prefix != "" && custom != "":
+			statuses[id] = prefix + ": " + custom
+		case prefix != "":
+			statuses[id] = prefix
+		case custom != "":
+			statuses[id] = "online: " + custom
+		}
+	}
+
+	return statuses
 }
