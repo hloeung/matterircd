@@ -3,6 +3,7 @@
 package slackclient
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -182,6 +183,16 @@ func (c *Client) Logout() error {
 
 func (c *Client) Connected() bool {
 	return c.connected
+}
+
+func (c *Client) Ping(ctx context.Context) error {
+	if c.sc == nil || !c.connected {
+		return errors.New("slackclient: not connected")
+	}
+
+	_, err := c.sc.AuthTestContext(ctx)
+
+	return err
 }
 
 func (c *Client) IncomingEvents() <-chan slack.RTMEvent {

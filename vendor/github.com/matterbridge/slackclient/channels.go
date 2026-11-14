@@ -258,3 +258,10 @@ func (c *Client) RemoveChannel(channelID string) {
 	delete(c.channels, channelID)
 	c.Unlock()
 }
+
+func (c *Client) GetChannelCount() int {
+	c.RLock()
+	defer c.RUnlock()
+
+	return len(c.channels)
+}

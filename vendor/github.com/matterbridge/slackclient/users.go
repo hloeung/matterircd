@@ -216,6 +216,49 @@ func (c *Client) SearchUsers(query string) []slack.User {
 	return matches
 }
 
+func (c *Client) GetUserCount() int {
+	c.RLock()
+	defer c.RUnlock()
+
+	return len(c.users)
+}
+
+func (c *Client) GetUserByUsername(username string) *slack.User {
+	if username == "" {
+		return nil
+	}
+
+	c.RLock()
+	empty := len(c.users) == 0
+	c.RUnlock()
+
+	if empty && c.sc != nil {
+		c.InitUsers()
+	}
+
+	c.RLock()
+	defer c.RUnlock()
+
+	for _, u := range c.users {
+		if strings.EqualFold(u.Name, username) || strings.EqualFold(u.Profile.DisplayName, username) {
+			user := u
+			return &user
+		}
+	}
+
+	return nil
+}
+
+func (c *Client) SetNick(ctx context.Context, name string) error {
+	if c.sc == nil {
+		return errors.New("slackclient: not connected")
+	}
+
+	return c.sc.SetUserProfileContext(ctx, "", &slack.UserProfile{
+		DisplayName: name,
+	})
+}
+
 const (
 	presenceCacheTTL = 30 * time.Second
 	presenceStaleTTL = 5 * time.Minute
